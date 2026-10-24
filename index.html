@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#05010b" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpolygon points='8,1 15,15 8,11 1,15' fill='%2329f0ff'/%3E%3C/svg%3E" />
+    <title>Nebula Harrier</title>
+    <style>
+      :root {
+        --cyan: #29f0ff;
+        --pink: #ff2bd6;
+        --amber: #ffb347;
+        --green: #5cff9d;
+        --bg: #05010b;
+        --panel: rgba(14, 4, 30, 0.86);
+        --ink: #e9e4ff;
+        --dim: #8d84b8;
+        --font: 'Segoe UI', 'Helvetica Neue', Arial, system-ui, sans-serif;
+        --mono: ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink);
+        font-family: var(--font); user-select: none; -webkit-user-select: none; touch-action: none;
+        overscroll-behavior: none;
+      }
+      #app { position: fixed; inset: 0; }
+      #game { position: absolute; inset: 0; }
+      #game canvas { display: block; image-rendering: pixelated; }
+
+      /* ---------- HUD ---------- */
+      #hud { position: absolute; inset: 0; pointer-events: none; display: none; font-family: var(--mono); }
+      #hud.on { display: block; }
+      .hud-tl { position: absolute; top: max(12px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); width: min(260px, 34vw); }
+      .hud-tc { position: absolute; top: max(12px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); text-align: center; }
+      .hud-tr { position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(64px, calc(env(safe-area-inset-right) + 56px)); text-align: right; }
+      .label { font-size: 10px; letter-spacing: 0.22em; color: var(--dim); text-transform: uppercase; }
+      .bar { position: relative; height: 8px; background: rgba(255,255,255,0.08); margin: 3px 0 8px; overflow: hidden;
+             clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%); }
+      .bar > i { position: absolute; inset: 0; transform-origin: left; display: block; }
+      #hp-fill { background: linear-gradient(90deg, var(--pink), var(--cyan)); box-shadow: 0 0 10px var(--cyan); }
+      #heat-fill { background: linear-gradient(90deg, var(--amber), #ff3d5a); }
+      #heat-bar.hot > i { animation: blink 0.12s steps(2) infinite; }
+      #dash-fill { background: var(--green); }
+      .score { font-size: 26px; font-weight: 700; letter-spacing: 0.06em; text-shadow: 0 0 12px var(--pink); }
+      .mult { font-size: 12px; color: var(--amber); }
+      .sector { font-size: 13px; letter-spacing: 0.3em; color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
+      .timer { font-size: 22px; font-weight: 700; }
+      #boons { position: absolute; left: max(16px, env(safe-area-inset-left)); bottom: max(14px, env(safe-area-inset-bottom)); display: flex; gap: 6px; }
+      #boons span { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--cyan); color: var(--cyan);
+        background: rgba(10, 2, 24, 0.7); font-size: 16px; position: relative; }
+      #boons span b { position: absolute; right: 1px; bottom: -1px; font-size: 9px; color: var(--amber); }
+      #boss { position: absolute; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(560px, 60vw); display: none; text-align: center; }
+      #boss.on { display: block; }
+      #boss .bar { height: 10px; }
+      #boss-fill { background: linear-gradient(90deg, #ff3d5a, var(--amber)); box-shadow: 0 0 12px #ff3d5a; }
+      #boss-name { font-size: 12px; letter-spacing: 0.35em; color: #ff8aa0; }
+
+      #pause-btn { position: absolute; top: max(10px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right));
+        width: 42px; height: 42px; border: 1px solid var(--cyan); background: rgba(10,2,24,0.6); color: var(--cyan);
+        font: 700 14px var(--mono); display: none; z-index: 5; cursor: pointer; }
+      #pause-btn.on { display: block; }
+
+      /* ---------- Banner ---------- */
+      #banner { position: absolute; left: 0; right: 0; top: 30%; text-align: center; pointer-events: none; opacity: 0; }
+      #banner.show { animation: banner 2.6s ease forwards; }
+      #banner h2 { margin: 0; font-size: clamp(26px, 6vw, 58px); letter-spacing: 0.25em; font-weight: 800; font-style: italic;
+        background: linear-gradient(180deg, #fff 0%, var(--cyan) 45%, var(--pink) 100%); -webkit-background-clip: text; background-clip: text; color: transparent;
+        filter: drop-shadow(0 0 14px rgba(255, 43, 214, 0.6)); }
+      #banner p { margin: 6px 0 0; font: 14px var(--mono); letter-spacing: 0.35em; color: var(--amber); }
+      #banner.warn h2 { background: linear-gradient(180deg, #fff, #ff3d5a); -webkit-background-clip: text; background-clip: text; animation: blink 0.25s steps(2) infinite; }
+      @keyframes banner { 0% { opacity: 0; transform: scaleX(1.6); } 12% { opacity: 1; transform: scaleX(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+      @keyframes blink { 50% { opacity: 0.35; } }
+
+      /* ---------- Screens ---------- */
+      #screens { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px;
+        background: radial-gradient(ellipse at center, rgba(5,1,11,0.35), rgba(5,1,11,0.8)); overflow-y: auto; }
+      #screens.on { display: flex; }
+      .screen { width: min(980px, 100%); max-height: 100%; text-align: center; }
+      .logo { margin: 0; font-size: clamp(36px, 9vw, 96px); font-weight: 900; font-style: italic; letter-spacing: 0.08em; line-height: 0.95;
+        background: linear-gradient(180deg, #fff 0%, #fff 30%, var(--cyan) 50%, var(--pink) 80%, #6a1bff 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 0 22px rgba(41,240,255,0.45)); }
+      .tag { font: 12px var(--mono); letter-spacing: 0.5em; color: var(--amber); margin: 6px 0 18px; }
+      h3 { margin: 0 0 12px; font-size: clamp(18px, 3.4vw, 28px); letter-spacing: 0.3em; font-style: italic; color: var(--cyan); text-shadow: 0 0 12px var(--cyan); }
+      .sub { color: var(--dim); font: 12px var(--mono); letter-spacing: 0.15em; margin-bottom: 14px; }
+      .cores { font: 700 16px var(--mono); color: var(--amber); letter-spacing: 0.1em; }
+      .row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 12px 0; }
+      .btn { font: 700 14px var(--mono); letter-spacing: 0.25em; text-transform: uppercase; color: var(--ink); background: rgba(16, 4, 34, 0.8);
+        border: 1px solid var(--cyan); padding: 12px 22px; min-width: 150px; cursor: pointer; position: relative;
+        clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); transition: background 0.12s, color 0.12s; }
+      .btn:hover, .btn:focus-visible, .btn:focus { outline: none; background: var(--cyan); color: #05010b; }
+      .btn.primary { border-color: var(--pink); background: rgba(255, 43, 214, 0.18); }
+      .btn.primary:hover, .btn.primary:focus { background: var(--pink); color: #fff; }
+      .btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+      .cards { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+      .card { width: min(280px, 30vw); min-width: 180px; text-align: left; padding: 14px; background: var(--panel); border: 1px solid rgba(41,240,255,0.4);
+        color: var(--ink); cursor: pointer; font-family: var(--font); transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s; }
+      .card:hover, .card:focus { outline: none; transform: translateY(-4px); border-color: var(--pink); box-shadow: 0 0 24px rgba(255,43,214,0.35); }
+      .card.sel { border-color: var(--amber); box-shadow: 0 0 18px rgba(255,179,71,0.4); }
+      .card.locked { opacity: 0.6; }
+      .card .glyph { font-size: 30px; color: var(--cyan); text-shadow: 0 0 10px var(--cyan); }
+      .card .name { font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; margin: 6px 0; font-size: 15px; }
+      .card .desc { font-size: 13px; color: #c8c0ec; line-height: 1.4; }
+      .card .meta { font: 11px var(--mono); color: var(--amber); margin-top: 8px; letter-spacing: 0.1em; }
+      .card .mods { margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+      .chip { font: 10px var(--mono); letter-spacing: 0.1em; padding: 2px 6px; border: 1px solid #ff3d5a; color: #ff8aa0; }
+      .chip.calm { border-color: var(--green); color: var(--green); }
+      .swatch { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin-right: 4px; }
+      .shop { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); text-align: left; margin: 12px 0; }
+      .shop .item { background: var(--panel); border: 1px solid rgba(41,240,255,0.3); padding: 12px; }
+      .pips { display: flex; gap: 4px; margin: 8px 0; }
+      .pips i { width: 18px; height: 6px; background: rgba(255,255,255,0.12); }
+      .pips i.on { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+      .tally { font: 14px var(--mono); line-height: 1.9; letter-spacing: 0.1em; display: inline-block; text-align: left; margin: 8px 0; }
+      .tally b { color: var(--amber); float: right; margin-left: 30px; }
+      .help { font: 11px var(--mono); color: var(--dim); letter-spacing: 0.08em; margin-top: 14px; line-height: 1.7; }
+      .synergy { color: var(--amber); font: 11px var(--mono); margin-top: 6px; }
+
+      /* ---------- Touch controls ---------- */
+      .touch-layer { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+      .stick-zone { position: absolute; left: 0; top: 15%; bottom: 0; width: 50%; pointer-events: auto; }
+      .stick-base { position: absolute; left: 0; top: 0; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(41,240,255,0.5);
+        background: rgba(41,240,255,0.06); display: none; }
+      .stick-knob { position: absolute; left: 35px; top: 35px; width: 50px; height: 50px; border-radius: 50%; background: rgba(41,240,255,0.35);
+        border: 2px solid var(--cyan); box-shadow: 0 0 14px var(--cyan); }
+      .fire-btn { position: absolute; right: max(28px, env(safe-area-inset-right)); bottom: max(36px, env(safe-area-inset-bottom)); width: 104px; height: 104px;
+        border-radius: 50%; border: 2px solid var(--pink); background: rgba(255,43,214,0.16); display: grid; place-items: center; pointer-events: auto;
+        font: 700 13px var(--mono); letter-spacing: 0.2em; color: #fff; box-shadow: 0 0 20px rgba(255,43,214,0.4); }
+      .fire-btn.active { background: rgba(255,43,214,0.5); transform: scale(0.94); }
+
+      /* ---------- Orientation lock overlay ---------- */
+      #rotate { position: absolute; inset: 0; z-index: 50; display: none; background: var(--bg); align-items: center; justify-content: center;
+        flex-direction: column; gap: 14px; font: 14px var(--mono); letter-spacing: 0.25em; color: var(--cyan); text-align: center; padding: 16px; }
+      #rotate .phone { width: 46px; height: 80px; border: 3px solid var(--cyan); border-radius: 8px; animation: rot 1.8s ease-in-out infinite; }
+      @keyframes rot { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+      @media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } }
+
+      .fps-meter { position: fixed; left: 8px; bottom: 8px; font: 11px var(--mono); color: var(--green); z-index: 60; background: rgba(0,0,0,0.5); padding: 2px 6px; }
+      @media (max-height: 480px) {
+        .logo { font-size: 40px; } .tag { margin-bottom: 8px; } .card { padding: 10px; } .card .desc { font-size: 12px; }
+        .btn { padding: 9px 16px; } .help { display: none; } h3 { margin-bottom: 6px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="game"></div>
+      <div id="hud">
+        <div class="hud-tl">
+          <div class="label">Hull</div>
+          <div class="bar" id="hp-bar"><i id="hp-fill"></i></div>
+          <div class="label">Heat</div>
+          <div class="bar" id="heat-bar"><i id="heat-fill"></i></div>
+          <div class="label">Evade</div>
+          <div class="bar" style="width: 50%"><i id="dash-fill"></i></div>
+        </div>
+        <div class="hud-tc">
+          <div class="sector" id="hud-sector">SECTOR 1</div>
+          <div class="timer" id="hud-timer">90</div>
+        </div>
+        <div class="hud-tr">
+          <div class="score" id="hud-score">0</div>
+          <div class="mult" id="hud-mult">×1.0</div>
+        </div>
+        <div id="boons"></div>
+        <div id="boss">
+          <div id="boss-name"></div>
+          <div class="bar"><i id="boss-fill"></i></div>
+        </div>
+      </div>
+      <div id="banner"><h2></h2><p></p></div>
+      <button id="pause-btn" aria-label="Pause">II</button>
+      <div id="screens"></div>
+      <div id="rotate"><div class="phone"></div>ROTATE TO LANDSCAPE</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
