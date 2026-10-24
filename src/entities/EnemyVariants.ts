@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { bus } from '../core/EventBus';
 import { ATLAS, createBossModel, createSentinelModel, createTitanModel, type BossModel, type SentinelModel, type TitanModel } from '../procgen/ModelFactory';
 import { ENEMY_COST } from '../procgen/SectorBuilder';
+import { terrainY } from '../procgen/Shaders';
 import { Enemy, hermite, type GameContext } from './EnemyBase';
 import { segPointDist2 } from './ProjectileSystem';
 
@@ -117,13 +118,13 @@ export class DroneWyrm extends Enemy {
 
     // Render.
     if (this.pos.z < LOD_Z) {
-      const c = ctx.edgeColor;
-      ctx.batch.push(this.pos.x, this.pos.y, this.pos.z, ATLAS.WYRM_LOD, 4.5, 4.5, 0, c.r * 1.5, c.g * 1.5, c.b * 1.5, 1);
+      const c = ctx.accentColor;
+      ctx.batch.push(this.pos.x, this.pos.y, this.pos.z, ATLAS.WYRM_LOD, 4.5, 4.5, 0, c.r, c.g, c.b, 1);
       for (let i = 0; i < DroneWyrm.SEGS; i++) this.drawn[i].copy(this.segs[i]);
       return;
     }
     const t = ctx.time;
-    const ec = ctx.edgeColor;
+    const ec = ctx.accentColor;
     const fl = this.flash;
     for (let i = 0; i < DroneWyrm.SEGS; i++) {
       const s = this.segs[i];
@@ -136,8 +137,9 @@ export class DroneWyrm extends Enemy {
       _q.setFromUnitVectors(FWD, _d);
       const sc = i === 0 ? 1.25 : 1.0 - i * 0.075;
       _s.setScalar(sc);
-      const k = 1 + fl * 3;
-      ctx.wyrmWriter.write(dp, _q, _s, ec.r * k + fl, ec.g * k + fl, ec.b * k + fl);
+      // Alternate body / belly bands; hit flash blends toward white.
+      const band = i % 2 === 0 ? 1 : 0.82;
+      ctx.wyrmWriter.write(dp, _q, _s, ec.r * band + (1 - ec.r * band) * fl, ec.g * band + (1 - ec.g * band) * fl, ec.b * band + (1 - ec.b * band) * fl);
     }
   }
 
@@ -153,10 +155,10 @@ export class DroneWyrm extends Enemy {
 
   protected override onDeath(ctx: GameContext): void {
     super.onDeath(ctx);
-    const c = ctx.edgeColor;
+    const c = ctx.accentColor;
     for (let i = 1; i < DroneWyrm.SEGS; i++) {
       const s = this.drawn[i];
-      ctx.particles.burst(s.x, s.y, s.z, 3, 8, c.r * 1.5, c.g * 1.5, c.b * 1.5, 0.5);
+      ctx.particles.burst(s.x, s.y, s.z, 3, 8, c.r, c.g, c.b, 0.5);
     }
   }
 
@@ -256,9 +258,10 @@ export class PylonSentinel extends Enemy {
     this.model.head.getWorldPosition(this.headPos);
     if (ctx.player.alive) this.model.head.lookAt(ctx.player.pos.x, ctx.player.pos.y + 0.9, ctx.player.pos.z);
     const charging = this.state === 'charge' ? 0.5 + 0.5 * Math.sin(this.stateT * 40) : 0;
-    this.model.materials[0].uniforms.uFlash.value = this.flash;
-    this.model.materials[1].uniforms.uFlash.value = Math.max(this.flash, charging);
-    for (const l of this.model.lines) l.uniforms.uFlash.value = this.flash;
+    const [shell, eye, white] = this.model.materials;
+    shell.uniforms.uFlash.value = this.flash;
+    white.uniforms.uFlash.value = this.flash;
+    eye.uniforms.uFlash.value = Math.max(this.flash, charging);
   }
 
   private next(s: PylonSentinel['state']): void {
@@ -285,7 +288,7 @@ export class PylonSentinel extends Enemy {
 
   dispose(ctx: GameContext): void {
     ctx.scene.remove(this.model.root);
-    for (const m of [...this.model.materials, ...this.model.lines]) m.dispose();
+    for (const m of this.model.materials) m.dispose();
   }
 }
 
@@ -389,7 +392,7 @@ export class NebulaTitan extends Enemy {
       if (this.plateHp[part] <= 0) {
         const p = this.platePos[part];
         this.model.plates[part].visible = false;
-        ctx.particles.explosion(p.x, p.y, p.z, 0.9, 2, 0.4, 1.6);
+        ctx.particles.explosion(p.x, p.y, p.z, 0.9, 1, 0.55, 0.15);
         ctx.sfx.explosion(0.5);
       }
       return false;
@@ -399,13 +402,13 @@ export class NebulaTitan extends Enemy {
   }
 
   protected override onDeath(ctx: GameContext): void {
-    ctx.particles.explosion(this.pos.x, this.pos.y, this.pos.z, 2.6, 2, 1, 0.4);
+    ctx.particles.explosion(this.pos.x, this.pos.y, this.pos.z, 2.6, 0.75, 0.45, 1);
   }
 
   dispose(ctx: GameContext): void {
     ctx.scene.remove(this.model.root);
     this.model.coreMat.dispose();
-    for (const m of this.model.plateMats) m.dispose();
+    for (const m of [...this.model.plateMats, ...this.model.extraMats]) m.dispose();
   }
 }
 
@@ -483,14 +486,13 @@ export class SectorBoss extends Enemy {
       this.phase = want;
       this.shieldT = 1.2;
       ctx.projectiles.clearEnemyBullets(ctx.particles);
-      ctx.particles.explosion(this.pos.x, this.pos.y, this.pos.z, 3, 2, 0.6, 2);
+      ctx.particles.explosion(this.pos.x, this.pos.y, this.pos.z, 3, 1, 0.4, 0.75);
       bus.emit('boss:phase', { phase: want });
     }
     if (this.shieldT > 0) this.shieldT -= dt;
 
     const flash = Math.max(this.flash, this.shieldT > 0 ? 0.5 + 0.5 * Math.sin(ctx.time * 30) : 0);
     for (const mat of m.materials) mat.uniforms.uFlash.value = flash;
-    for (const mat of m.lineMats) mat.uniforms.uFlash.value = flash;
 
     if (this.entering || this.shieldT > 0 || !ctx.player.alive) return;
     this.runPatterns(dt * ctx.fx.fireRateMul, ctx);
@@ -576,63 +578,89 @@ export class SectorBoss extends Enemy {
   }
 
   protected override onDeath(ctx: GameContext): void {
-    ctx.particles.explosion(this.pos.x, this.pos.y, this.pos.z, 5, 2, 0.8, 2);
+    ctx.particles.explosion(this.pos.x, this.pos.y, this.pos.z, 5);
   }
 
   dispose(ctx: GameContext): void {
     ctx.scene.remove(this.model.root);
-    for (const m of [...this.model.materials, ...this.model.lineMats]) m.dispose();
+    for (const m of this.model.materials) m.dispose();
   }
 }
 
 // ===========================================================================
-// Crystal spire field: scrolling scenery and lane obstacles (indestructible).
+// Tree field: puffy trees that scroll with the rail and sit on the terrain.
+// Trees in the flight lane are solid obstacles (indestructible).
 // ===========================================================================
-export class SpireField {
-  private readonly items: { x: number; z: number; s: number; hit: boolean }[] = [];
+export class TreeField {
+  private readonly items: { x: number; z: number; s: number; hue: number; hit: boolean; wob: number }[] = [];
   private readonly m = new THREE.Matrix4();
+  private readonly q = new THREE.Quaternion();
+  private readonly v = new THREE.Vector3();
+  private readonly sc = new THREE.Vector3();
   private readonly c = new THREE.Color();
 
-  constructor(readonly mesh: THREE.InstancedMesh) {}
+  constructor(
+    readonly trunks: THREE.InstancedMesh,
+    readonly canopies: THREE.InstancedMesh,
+  ) {}
 
   spawn(x: number, scale: number): void {
-    if (this.items.length >= this.mesh.instanceMatrix.count) return;
-    this.items.push({ x, z: -190, s: scale, hit: false });
+    if (this.items.length >= this.canopies.instanceMatrix.count) return;
+    this.items.push({ x, z: -190, s: scale, hue: Math.random(), hit: false, wob: 0 });
   }
 
   clear(): void {
     this.items.length = 0;
-    this.mesh.count = 0;
+    this.trunks.count = 0;
+    this.canopies.count = 0;
   }
 
-  /** Moves spires with the rail; returns damage dealt to the player this frame. */
-  update(dt: number, railSpeed: number, px: number, py: number, pz: number, edge: THREE.Color, vulnerable: boolean): number {
+  /** Moves trees with the rail; returns damage dealt to the player this frame. */
+  update(
+    dt: number,
+    railSpeed: number,
+    scroll: number,
+    px: number,
+    py: number,
+    pz: number,
+    colors: readonly THREE.Color[],
+    vulnerable: boolean,
+  ): number {
     let dmg = 0;
-    let n = 0;
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];
       const prevZ = it.z;
       it.z += railSpeed * dt;
+      it.wob = Math.max(0, it.wob - dt * 1.5);
       if (it.z > 12) {
         this.items.splice(i, 1);
         continue;
       }
-      const height = 7.0 * it.s;
-      const w = 0.9 * it.s;
-      if (!it.hit && vulnerable && prevZ < pz + 0.7 && it.z > pz - 0.7 && Math.abs(it.x - px) < w + 0.45 && py < height * 0.85) {
+      const height = 6.3 * it.s;
+      const w = 1.0 * it.s;
+      if (!it.hit && vulnerable && prevZ < pz + 0.7 && it.z > pz - 0.7 && Math.abs(it.x - px) < w + 0.45 && py < height) {
         it.hit = true;
+        it.wob = 1;
         dmg += 25;
       }
     }
+    let n = 0;
     for (const it of this.items) {
-      this.m.makeScale(it.s, it.s, it.s).setPosition(it.x, 0, it.z);
-      this.mesh.setMatrixAt(n, this.m);
-      this.mesh.setColorAt(n, this.c.copy(edge).multiplyScalar(it.hit ? 2.5 : 1));
+      const y = terrainY(it.x, it.z, scroll);
+      // Gentle sway, plus a springy wobble when the Harrier clips a tree.
+      const sway = Math.sin(it.z * 0.15 + it.hue * 6) * 0.03 + Math.sin(it.wob * 18) * it.wob * 0.25;
+      this.q.setFromAxisAngle(FWD, sway);
+      this.m.compose(this.v.set(it.x, y, it.z), this.q, this.sc.setScalar(it.s));
+      this.trunks.setMatrixAt(n, this.m);
+      this.canopies.setMatrixAt(n, this.m);
+      this.canopies.setColorAt(n, this.c.copy(colors[Math.floor(it.hue * colors.length) % colors.length]));
       n++;
     }
-    this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.trunks.count = n;
+    this.canopies.count = n;
+    this.trunks.instanceMatrix.needsUpdate = true;
+    this.canopies.instanceMatrix.needsUpdate = true;
+    if (this.canopies.instanceColor) this.canopies.instanceColor.needsUpdate = true;
     return dmg;
   }
 }

@@ -3,6 +3,13 @@
 // explosion flipbook, distant enemy LOD) as SVG and rasterises it with sharp.
 // No hand-made assets are involved: every pixel comes from the code below.
 //
+// Channel encoding for tintable cells (everything except the explosion
+// flipbook, which is baked in full colour):
+//   R = "whiteness"  (0 = runtime tint colour, 1 = pure white highlight)
+//   G = brightness   (1 = full, lower = dark outline / shading)
+//   A = coverage
+// The sprite shader computes  rgb = mix(tint, white, R) * G.
+//
 // Cell layout MUST stay in sync with ATLAS in src/procgen/ModelFactory.ts.
 import sharp from 'sharp';
 import { mkdirSync } from 'node:fs';
@@ -27,16 +34,32 @@ function mulberry32(seed) {
 }
 const rng = mulberry32(0x4e48);
 
+// Encoded colours.
+const WHITE = '#ffffff'; // white highlight
+const TINT = '#00ff00'; // pure tint
+const HALF = '#80ff80'; // half-way to white
+const DARK = '#005000'; // dark outline (tint * 0.31)
+
 const defs = [];
 const cells = [];
 let gradId = 0;
 
-function radial(stops) {
+function radial(stops, cx = '50%', cy = '50%', r = '50%') {
   const id = `g${gradId++}`;
   defs.push(
-    `<radialGradient id="${id}" cx="50%" cy="50%" r="50%">${stops
+    `<radialGradient id="${id}" cx="${cx}" cy="${cy}" r="${r}">${stops
       .map(([o, c, a]) => `<stop offset="${o}" stop-color="${c}" stop-opacity="${a}"/>`)
       .join('')}</radialGradient>`,
+  );
+  return `url(#${id})`;
+}
+
+function linear(stops, x1 = 0, y1 = 0, x2 = 0, y2 = 1) {
+  const id = `g${gradId++}`;
+  defs.push(
+    `<linearGradient id="${id}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}">${stops
+      .map(([o, c, a]) => `<stop offset="${o}" stop-color="${c}" stop-opacity="${a}"/>`)
+      .join('')}</linearGradient>`,
   );
   return `url(#${id})`;
 }
@@ -47,7 +70,7 @@ function cell(index, body) {
   cells.push(`<g transform="translate(${x},${y})">${body}</g>`);
 }
 
-function star(points, rOuter, rInner, cx = 64, cy = 64, rot = 0) {
+function star(points, rOuter, rInner, cx = 64, cy = 64, rot = -Math.PI / 2) {
   const pts = [];
   for (let i = 0; i < points * 2; i++) {
     const r = i % 2 === 0 ? rOuter : rInner;
@@ -57,124 +80,159 @@ function star(points, rOuter, rInner, cx = 64, cy = 64, rot = 0) {
   return pts.join(' ');
 }
 
-const WHITE_GLOW = () =>
+const softGlow = (a = 0.45) =>
   radial([
-    [0, '#ffffff', 1],
-    [0.25, '#ffffff', 0.85],
-    [0.6, '#ffffff', 0.25],
-    [1, '#ffffff', 0],
+    [0, TINT, a],
+    [0.6, TINT, a * 0.4],
+    [1, TINT, 0],
   ]);
 
-// 0: PLAYER_BOLT – plasma lance: soft halo + bright diamond core (tinted at runtime)
+// 0: PLAYER_BOLT – glossy energy capsule: white core, tinted body, soft halo
 cell(
   0,
-  `<circle cx="64" cy="64" r="62" fill="${WHITE_GLOW()}"/>
-   <polygon points="64,8 76,64 64,120 52,64" fill="#ffffff" opacity="0.95"/>
-   <circle cx="64" cy="64" r="14" fill="#ffffff"/>`,
+  `<ellipse cx="64" cy="64" rx="34" ry="62" fill="${softGlow(0.5)}"/>
+   <rect x="44" y="8" width="40" height="112" rx="20" fill="${DARK}" opacity="0.55"/>
+   <rect x="47" y="11" width="34" height="106" rx="17" fill="${TINT}"/>
+   <rect x="55" y="20" width="18" height="80" rx="9" fill="${HALF}"/>
+   <rect x="57" y="24" width="7" height="30" rx="3.5" fill="${WHITE}"/>`,
 );
 
-// 1: ENEMY_ORB – hot core with hard ring so hostile shots read clearly
+// 1: ENEMY_ORB – candy orb with dark rim for readability on bright skies
 cell(
   1,
-  `<circle cx="64" cy="64" r="60" fill="${radial([
-    [0, '#ffffff', 0.9],
-    [0.5, '#ffffff', 0.35],
-    [1, '#ffffff', 0],
-  ])}"/>
-   <circle cx="64" cy="64" r="30" fill="none" stroke="#ffffff" stroke-width="7"/>
-   <circle cx="64" cy="64" r="16" fill="#ffffff"/>`,
+  `<circle cx="64" cy="64" r="62" fill="${softGlow(0.35)}"/>
+   <circle cx="64" cy="64" r="42" fill="${radial([
+     [0, WHITE, 1],
+     [0.35, HALF, 1],
+     [0.7, TINT, 1],
+     [1, TINT, 1],
+   ])}" stroke="${DARK}" stroke-width="8"/>
+   <ellipse cx="52" cy="50" rx="12" ry="8" fill="${WHITE}" opacity="0.9"/>`,
 );
 
-// 2: ENEMY_NEEDLE – laser segment (long, thin)
+// 2: ENEMY_NEEDLE – laser dart
 cell(
   2,
-  `<ellipse cx="64" cy="64" rx="22" ry="62" fill="${WHITE_GLOW()}"/>
-   <rect x="58" y="6" width="12" height="116" rx="6" fill="#ffffff"/>`,
+  `<ellipse cx="64" cy="64" rx="26" ry="62" fill="${softGlow(0.35)}"/>
+   <rect x="50" y="8" width="28" height="112" rx="14" fill="${TINT}" stroke="${DARK}" stroke-width="6"/>
+   <rect x="59" y="18" width="10" height="92" rx="5" fill="${WHITE}"/>`,
 );
 
-// 3: SPARK – four-point star
+// 3: SPARKLE – four-point twinkle
 cell(
   3,
-  `<circle cx="64" cy="64" r="40" fill="${WHITE_GLOW()}"/>
-   <polygon points="${star(4, 62, 7)}" fill="#ffffff"/>`,
+  `<circle cx="64" cy="64" r="44" fill="${softGlow(0.5)}"/>
+   <polygon points="${star(4, 62, 12)}" fill="${TINT}"/>
+   <polygon points="${star(4, 40, 7)}" fill="${WHITE}"/>`,
 );
 
-// 4..11: EXPLOSION flipbook (8 frames), baked in fire colours
+// 4..11: EXPLOSION flipbook – cartoon fireball blooming into soft smoke.
+const lerp = (a, b, t) => a + (b - a) * t;
+const mix = (c1, c2, t) => {
+  const p = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const a = p(c1);
+  const b = p(c2);
+  return `#${a.map((v, i) => Math.round(lerp(v, b[i], t)).toString(16).padStart(2, '0')).join('')}`;
+};
+const blobs = Array.from({ length: 9 }, (_, i) => ({
+  a: (i / 9) * Math.PI * 2 + rng() * 0.5,
+  d: 0.35 + rng() * 0.35,
+  s: 0.45 + rng() * 0.3,
+}));
 for (let f = 0; f < 8; f++) {
   const t = f / 7;
-  const r = 18 + t * 44;
-  const coreA = Math.max(0, 1 - t * 1.3);
-  let shards = '';
-  const n = 9;
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + rng() * 0.5;
-    const d0 = r * (0.35 + rng() * 0.25);
-    const d1 = r * (0.85 + rng() * 0.25);
-    const w = 0.12 + rng() * 0.1;
-    const p = [
-      [64 + Math.cos(a - w) * d0, 64 + Math.sin(a - w) * d0],
-      [64 + Math.cos(a) * d1, 64 + Math.sin(a) * d1],
-      [64 + Math.cos(a + w) * d0, 64 + Math.sin(a + w) * d0],
-    ]
-      .map((q) => q.map((v) => v.toFixed(1)).join(','))
-      .join(' ');
-    shards += `<polygon points="${p}" fill="#ffd27a" opacity="${(1 - t).toFixed(2)}"/>`;
-  }
-  cell(
-    4 + f,
-    `<circle cx="64" cy="64" r="${r.toFixed(1)}" fill="${radial([
-      [0, '#ffffff', coreA],
-      [0.3, '#ffb347', 0.9 * (1 - t * 0.6)],
-      [0.7, '#ff3d7f', 0.6 * (1 - t * 0.7)],
-      [1, '#5b1bff', 0],
-    ])}"/>
-     <circle cx="64" cy="64" r="${(r * 0.95).toFixed(1)}" fill="none" stroke="#ff7ad9" stroke-width="${(
-       4 *
-       (1 - t)
-     ).toFixed(2)}" opacity="${(0.8 * (1 - t)).toFixed(2)}"/>
-     ${shards}`,
+  const R = 22 + t * 34;
+  const smoke = Math.max(0, (t - 0.35) / 0.65); // 0 = fire, 1 = smoke
+  const alpha = f === 7 ? 0.35 : 1 - smoke * 0.55;
+  const core = mix('#fff8d6', '#f2f2f6', smoke);
+  const mid = mix('#ffcf3a', '#d9dbe6', smoke);
+  const edge = mix('#ff6a1f', '#a9adbf', smoke);
+  const line = mix('#d6411a', '#8b90a6', smoke);
+  let body = '';
+  const g = radial(
+    [
+      [0, core, 1],
+      [0.45, mid, 1],
+      [1, edge, 1],
+    ],
+    '42%',
+    '38%',
+    '65%',
   );
+  // Outline pass then fill pass so overlapping blobs read as one puffy mass.
+  for (const pass of ['line', 'fill']) {
+    for (const b of blobs) {
+      const x = 64 + Math.cos(b.a) * R * b.d;
+      const y = 64 + Math.sin(b.a) * R * b.d - smoke * 8;
+      const r = R * b.s;
+      body +=
+        pass === 'line'
+          ? `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(r + 3).toFixed(1)}" fill="${line}"/>`
+          : `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${g}"/>`;
+    }
+    body +=
+      pass === 'line'
+        ? `<circle cx="64" cy="${64 - smoke * 8}" r="${(R * 0.62 + 3).toFixed(1)}" fill="${line}"/>`
+        : `<circle cx="64" cy="${64 - smoke * 8}" r="${(R * 0.62).toFixed(1)}" fill="${g}"/>`;
+  }
+  // Highlight blobs.
+  body += `<circle cx="${(64 - R * 0.25).toFixed(1)}" cy="${(58 - R * 0.25 - smoke * 8).toFixed(1)}" r="${(R * 0.22).toFixed(
+    1,
+  )}" fill="#ffffff" opacity="${(0.75 * (1 - smoke * 0.6)).toFixed(2)}"/>`;
+  cell(4 + f, `<g opacity="${alpha.toFixed(2)}">${body}</g>`);
 }
 
-// 12: MINE – hexagonal antimatter charge
+// 12: MINE – hexagonal charge
 {
-  const hex = [];
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
-    hex.push(`${(64 + Math.cos(a) * 34).toFixed(1)},${(64 + Math.sin(a) * 34).toFixed(1)}`);
-  }
+  const hex = (r) => {
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
+      out.push(`${(64 + Math.cos(a) * r).toFixed(1)},${(64 + Math.sin(a) * r).toFixed(1)}`);
+    }
+    return out.join(' ');
+  };
   cell(
     12,
-    `<circle cx="64" cy="64" r="62" fill="${WHITE_GLOW()}" opacity="0.6"/>
-     <polygon points="${hex.join(' ')}" fill="none" stroke="#ffffff" stroke-width="7"/>
-     <circle cx="64" cy="64" r="12" fill="#ffffff"/>`,
+    `<circle cx="64" cy="64" r="62" fill="${softGlow(0.4)}"/>
+     <polygon points="${hex(40)}" fill="${TINT}" stroke="${DARK}" stroke-width="7" stroke-linejoin="round"/>
+     <circle cx="64" cy="64" r="15" fill="${WHITE}"/>`,
   );
 }
 
-// 13: WYRM_LOD – distant enemy silhouette (chevron glider with glow)
+// 13: WYRM_LOD – distant enemy: rounded body with outline and highlight
 cell(
   13,
-  `<circle cx="64" cy="64" r="58" fill="${WHITE_GLOW()}" opacity="0.5"/>
-   <polygon points="64,30 104,76 64,62 24,76" fill="#ffffff"/>
-   <polygon points="64,62 80,96 64,88 48,96" fill="#ffffff" opacity="0.7"/>`,
+  `<ellipse cx="64" cy="70" rx="44" ry="30" fill="${TINT}" stroke="${DARK}" stroke-width="7"/>
+   <circle cx="64" cy="54" r="26" fill="${TINT}" stroke="${DARK}" stroke-width="7"/>
+   <ellipse cx="56" cy="46" rx="9" ry="6" fill="${WHITE}"/>`,
 );
 
 // 14: RING – shockwave
 cell(
   14,
-  `<circle cx="64" cy="64" r="54" fill="none" stroke="#ffffff" stroke-width="8" opacity="0.9"/>
-   <circle cx="64" cy="64" r="58" fill="none" stroke="#ffffff" stroke-width="3" opacity="0.4"/>`,
+  `<circle cx="64" cy="64" r="54" fill="none" stroke="${TINT}" stroke-width="10" opacity="0.9"/>
+   <circle cx="64" cy="64" r="49" fill="none" stroke="${WHITE}" stroke-width="3" opacity="0.8"/>`,
 );
 
-// 15: SOFT_GLOW – generic round glow for engine jets / streaks
-cell(
-  15,
-  `<circle cx="64" cy="64" r="63" fill="${radial([
-    [0, '#ffffff', 1],
-    [0.4, '#ffffff', 0.45],
-    [1, '#ffffff', 0],
-  ])}"/>`,
-);
+// 15: PUFF – soft cloud puff (tinted, lit from above)
+{
+  const shade = linear([
+    [0, '#d0ffd0', 1],
+    [1, '#60dc60', 1],
+  ]);
+  let puffs = '';
+  for (const [x, y, r] of [
+    [64, 70, 40],
+    [40, 74, 28],
+    [88, 74, 28],
+    [52, 52, 28],
+    [78, 50, 26],
+  ]) {
+    puffs += `<circle cx="${x}" cy="${y}" r="${r}" fill="${shade}"/>`;
+  }
+  cell(15, `<g opacity="0.95">${puffs}</g><ellipse cx="54" cy="46" rx="12" ry="7" fill="${WHITE}" opacity="0.7"/>`);
+}
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}">
 <defs>${defs.join('')}</defs>

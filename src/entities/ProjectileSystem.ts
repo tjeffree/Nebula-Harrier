@@ -27,7 +27,7 @@ export class SpriteBatch {
     geo.setAttribute('aPos', this.aPos);
     geo.setAttribute('aParams', this.aParams);
     geo.setAttribute('aColor', this.aColor);
-    this.mesh = new THREE.InstancedMesh(geo, createSpriteMaterial(atlas, ATLAS.COLS), capacity);
+    this.mesh = new THREE.InstancedMesh(geo, createSpriteMaterial(atlas, ATLAS.COLS, ATLAS.EXPLOSION_START, ATLAS.EXPLOSION_START + ATLAS.EXPLOSION_FRAMES - 1), capacity);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
     this.mesh.renderOrder = 10;
@@ -202,7 +202,7 @@ export class ProjectileSystem {
   private readonly nearZ = 7;
   private readonly farZ = -190;
 
-  spawnPlayer(x: number, y: number, z: number, vx: number, vy: number, vz: number, dmg: number, size = 1.1): void {
+  spawnPlayer(x: number, y: number, z: number, vx: number, vy: number, vz: number, dmg: number, size = 1.1, color = 0xffd23f): void {
     const p = this.player;
     const i = p.add();
     if (i < 0) return;
@@ -217,9 +217,9 @@ export class ProjectileSystem {
     p.size[i] = size;
     p.cell[i] = ATLAS.PLAYER_BOLT;
     p.homing[i] = 0;
-    p.r[i] = 0.55;
-    p.g[i] = 1.6;
-    p.b[i] = 2.0;
+    p.r[i] = ((color >> 16) & 255) / 255;
+    p.g[i] = ((color >> 8) & 255) / 255;
+    p.b[i] = (color & 255) / 255;
   }
 
   spawnEnemy(
@@ -246,9 +246,9 @@ export class ProjectileSystem {
     e.cell[i] = opts.needle ? ATLAS.ENEMY_NEEDLE : ATLAS.ENEMY_ORB;
     e.homing[i] = opts.homing ?? 0;
     const c = opts.color ?? 0xff4fa0;
-    e.r[i] = (((c >> 16) & 255) / 255) * 1.8;
-    e.g[i] = (((c >> 8) & 255) / 255) * 1.8;
-    e.b[i] = ((c & 255) / 255) * 1.8;
+    e.r[i] = ((c >> 16) & 255) / 255;
+    e.g[i] = ((c >> 8) & 255) / 255;
+    e.b[i] = (c & 255) / 255;
   }
 
   /** Converts every hostile bullet into a spark (e.g. on boss death / bomb). */
@@ -391,7 +391,7 @@ export class ParticleSystem {
     r: number,
     g: number,
     b: number,
-    cell: number = ATLAS.GLOW,
+    cell: number = ATLAS.PUFF,
     drag = 2,
     anim = 0,
     stretch = 0,
@@ -436,16 +436,21 @@ export class ParticleSystem {
     }
   }
 
-  /** Flipbook explosion + shockwave ring + debris sparks. */
-  explosion(x: number, y: number, z: number, scale: number, r = 1.4, g = 0.6, b = 1.6): void {
-    this.emit(x, y, z, 0, 0, 0, 0.55, 3.2 * scale, 6.5 * scale, 1.3, 1.3, 1.3, ATLAS.EXPLOSION_START, 0, 1);
-    this.emit(x, y, z, 0, 0, 0, 0.4, 1 * scale, 9 * scale, r, g, b, ATLAS.RING, 0);
-    const n = Math.min(40, Math.round(10 + scale * 8));
+  /** Cartoon fireball flipbook + shockwave ring + sparkles + lingering smoke puffs. */
+  explosion(x: number, y: number, z: number, scale: number, r = 1, g = 0.82, b = 0.25): void {
+    this.emit(x, y, z, 0, 0, 0, 0.6, 3.4 * scale, 6.5 * scale, 1, 1, 1, ATLAS.EXPLOSION_START, 0, 1);
+    this.emit(x, y, z, 0, 0, 0, 0.35, 1 * scale, 9 * scale, r, g, b, ATLAS.RING, 0);
+    const n = Math.min(36, Math.round(8 + scale * 7));
     this.burst(x, y, z, n, 14 * Math.sqrt(scale), r, g, b, 0.7);
     for (let k = 0; k < 3 * scale; k++) {
-      const ox = (Math.random() - 0.5) * 2 * scale;
-      const oy = (Math.random() - 0.5) * 2 * scale;
-      this.emit(x + ox, y + oy, z, ox * 2, oy * 2, 4, 0.5 + Math.random() * 0.3, 1.5 * scale, 4 * scale, 1.2, 1.2, 1.2, ATLAS.EXPLOSION_START, 1, 1);
+      const ox = (Math.random() - 0.5) * 2.2 * scale;
+      const oy = (Math.random() - 0.5) * 2.2 * scale;
+      this.emit(x + ox, y + oy, z, ox * 2, oy * 2 + 1, 4, 0.5 + Math.random() * 0.3, 1.6 * scale, 4 * scale, 1, 1, 1, ATLAS.EXPLOSION_START, 1, 1);
+    }
+    // Soft white smoke that drifts upward after the flash.
+    for (let k = 0; k < 2 + scale * 2; k++) {
+      const ox = (Math.random() - 0.5) * 2.5 * scale;
+      this.emit(x + ox, y + (Math.random() - 0.3) * scale, z, ox * 0.8, 2 + Math.random() * 2, 3, 1.1 + Math.random() * 0.6, 1.5 * scale, 4.2 * scale, 1, 1, 1, ATLAS.PUFF, 1.2);
     }
   }
 
@@ -511,9 +516,8 @@ export class ArcRenderer {
     this.lines = new THREE.LineSegments(
       geo,
       new THREE.LineBasicMaterial({
-        color: new THREE.Color(0.7, 1.4, 2.0),
+        color: 0x2fd3ff,
         transparent: true,
-        blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),
     );

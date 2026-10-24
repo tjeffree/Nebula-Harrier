@@ -7,8 +7,8 @@ import { MusicTrackGen } from './audio/MusicTrackGen';
 import { Player } from './entities/Player';
 import { ArcRenderer, ParticleSystem, ProjectileSystem, SpriteBatch, type Hittable } from './entities/ProjectileSystem';
 import { Enemy, EnemyManager, InstanceWriter, type GameContext } from './entities/EnemyBase';
-import { DroneWyrm, NebulaTitan, PylonSentinel, SectorBoss, SpireField } from './entities/EnemyVariants';
-import { ATLAS, createGround, createSky, createSpireInstanced, createWyrmInstanced, loadAtlas } from './procgen/ModelFactory';
+import { DroneWyrm, NebulaTitan, PylonSentinel, SectorBoss, TreeField } from './entities/EnemyVariants';
+import { ATLAS, createBlobShadow, createGround, createSky, createTreeInstanced, createWyrmInstanced, loadAtlas } from './procgen/ModelFactory';
 import { globalUniforms } from './procgen/Shaders';
 import {
   BOSS_NAMES,
@@ -61,7 +61,9 @@ class Game {
   private readonly batch: SpriteBatch;
   private readonly arcs = new ArcRenderer();
   private readonly enemies = new EnemyManager();
-  private readonly spires: SpireField;
+  private readonly trees: TreeField;
+  private readonly foliage: THREE.Color[] = [];
+  private readonly shadow: THREE.Mesh;
   private readonly ctx: GameContext;
   private readonly spawner: Spawner;
 
@@ -104,9 +106,11 @@ class Game {
 
     scene.add(createSky());
     scene.add(createGround());
-    const spireMesh = createSpireInstanced(96);
-    scene.add(spireMesh);
-    this.spires = new SpireField(spireMesh);
+    const treeMeshes = createTreeInstanced(96);
+    scene.add(treeMeshes.trunks, treeMeshes.canopies);
+    this.trees = new TreeField(treeMeshes.trunks, treeMeshes.canopies);
+    this.shadow = createBlobShadow();
+    scene.add(this.shadow);
     const wyrmMesh = createWyrmInstanced(512);
     scene.add(wyrmMesh);
     this.batch = new SpriteBatch(8192, loadAtlas());
@@ -131,7 +135,7 @@ class Game {
       fx: resolveModifiers([]),
       enemies: this.enemies,
       wyrmWriter: new InstanceWriter(wyrmMesh),
-      edgeColor: new THREE.Color(PALETTES[0].b),
+      accentColor: new THREE.Color(PALETTES[0].a),
     };
 
     this.spawner = {
@@ -141,7 +145,7 @@ class Game {
         this.enemies.add(new PylonSentinel(this.ctx, x, -60 + rng() * 14));
       },
       spawnTitan: (rng) => this.enemies.add(new NebulaTitan(this.ctx, (rng() - 0.5) * 10, 3.5 + rng() * 2)),
-      spawnSpire: (x, s) => this.spires.spawn(x, s),
+      spawnSpire: (x, s) => this.trees.spawn(x, s),
       aliveCost: () => this.enemies.aliveCost(),
     };
 
@@ -291,7 +295,7 @@ class Game {
     this.projectiles.clearAll();
     this.particles.clear();
     this.arcs.clear();
-    this.spires.clear();
+    this.trees.clear();
     this.mines.length = 0;
     this.boss = null;
     $('#boss').classList.remove('on');
@@ -315,11 +319,17 @@ class Game {
   private applyPalette(p: SectorPalette): void {
     globalUniforms.uPalA.value.set(p.a);
     globalUniforms.uPalB.value.set(p.b);
-    globalUniforms.uFogColor.value.set(p.fog);
-    this.ctx.edgeColor.set(p.b);
+    globalUniforms.uFogColor.value.set(p.haze);
+    globalUniforms.uSkyTop.value.set(p.skyTop);
+    globalUniforms.uGroundA.value.set(p.groundA);
+    globalUniforms.uGroundB.value.set(p.groundB);
+    this.engine.renderer.setClearColor(p.haze, 1);
+    this.ctx.accentColor.set(p.a);
+    this.foliage.length = 0;
+    for (const c of p.foliage) this.foliage.push(new THREE.Color(c));
     const fogMul = this.ctx.fx.fogMul;
-    globalUniforms.uFogNear.value = 45 * fogMul;
-    globalUniforms.uFogFar.value = 175 * Math.max(0.6, fogMul);
+    globalUniforms.uFogNear.value = 60 * fogMul;
+    globalUniforms.uFogFar.value = 210 * Math.max(0.6, fogMul);
   }
 
   private spawnWyrms(n: number, rng: () => number): void {
@@ -503,9 +513,10 @@ class Game {
       this.projectiles.update(dt, this.enemies.list, this.player, this.ctx.fx.bulletSpeedMul);
       this.updateMines(dt);
     }
-    const spireDmg = this.spires.update(dt, rail, this.player.pos.x, this.player.pos.y, this.player.pos.z, this.ctx.edgeColor, playing && this.player.vulnerable());
-    if (spireDmg > 0) {
-      this.player.takeDamage(spireDmg);
+    const p = this.player.pos;
+    const treeDmg = this.trees.update(dt, rail, globalUniforms.uScroll.value, p.x, p.y, p.z, this.foliage, playing && this.player.vulnerable());
+    if (treeDmg > 0) {
+      this.player.takeDamage(treeDmg);
       this.player.vel.x *= -0.6;
     }
     if (!playing || this.state === 'warp') this.director?.update(dt, 0, this.spawner, false);
@@ -581,7 +592,7 @@ class Game {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 4 + Math.random() * 18;
-      this.particles.emit(Math.cos(a) * r, 3 + Math.sin(a) * r * 0.6, -120, 0, 0, 260, 0.5, 0.25, 0.25, 0.8, 1.2, 2, ATLAS.GLOW, 0, 0, 14);
+      this.particles.emit(Math.cos(a) * r, 3 + Math.sin(a) * r * 0.6, -120, 0, 0, 260, 0.5, 0.3, 0.3, 1, 1, 1, ATLAS.SPARK, 0, 0, 12);
     }
   }
 
@@ -602,7 +613,14 @@ class Game {
 
   private updateEffects(dt: number): void {
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2.5);
-    this.engine.crt.uniforms.uDamage.value = this.damageFlash;
+    this.engine.post.uniforms.uDamage.value = this.damageFlash;
+    // Contact shadow shrinks and fades as the Harrier climbs.
+    const p = this.player.pos;
+    const k = Math.min(1, p.y / 7.5);
+    this.shadow.visible = this.player.alive;
+    this.shadow.position.set(p.x, 0.04, p.z);
+    this.shadow.scale.setScalar(1.25 * (1 - k * 0.45));
+    (this.shadow.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 0.38 * (1 - k * 0.6);
   }
 
   // =========================================================================
@@ -717,7 +735,6 @@ class Game {
     return `<div class="row">
       <button class="btn" data-action="toggle" data-arg="music">Music ${s.music > 0 ? 'On' : 'Off'}</button>
       <button class="btn" data-action="toggle" data-arg="sfx">SFX ${s.sfx > 0 ? 'On' : 'Off'}</button>
-      <button class="btn" data-action="toggle" data-arg="crt">CRT ${s.crt ? 'On' : 'Off'}</button>
     </div>`;
   }
 
@@ -730,7 +747,6 @@ class Game {
   private applySettings(): void {
     const s = this.meta.profile.settings;
     this.sfx.setVolumes(s.music, s.sfx);
-    this.engine.crt.uniforms.uScan.value = s.crt ? 0.22 : 0;
   }
 
   private showTitle(): void {
@@ -754,8 +770,8 @@ class Game {
       })
       .join('');
     this.showScreen(`
-      <h1 class="logo">NEBULA<br/>HARRIER</h1>
-      <div class="tag">VAPOR-CRYSTALLINE RAIL ASSAULT</div>
+      <h1 class="logo">NEBULA<br/><span>HARRIER</span></h1>
+      <div class="tag">SKYBOUND RAIL ASSAULT</div>
       <div class="cores">◆ ${prof.chronocores.toLocaleString('en-US')} CHRONOCORES · BEST ${prof.best_score.toLocaleString('en-US')}</div>
       <div class="cards" style="margin-top:14px">${archCards}</div>
       <div class="row">
@@ -773,7 +789,7 @@ class Game {
     this.pendingNodes = nodes;
     const cards = nodes
       .map((n, i) => {
-        const sw = `<span class="swatch" style="background:#${n.palette.b.toString(16).padStart(6, '0')}"></span>`;
+        const sw = `<span class="swatch" style="background:#${n.palette.a.toString(16).padStart(6, '0')}"></span>`;
         const mods = n.modifiers.length
           ? n.modifiers.map((m) => `<span class="chip" title="${ELITE_MODIFIERS[m].desc}">${ELITE_MODIFIERS[m].name} Ω${ELITE_MODIFIERS[m].omega}</span>`).join('')
           : '<span class="chip calm">NO ELITE MODIFIERS</span>';
@@ -962,13 +978,12 @@ class Game {
         const s = prof.settings;
         if (arg === 'music') s.music = s.music > 0 ? 0 : 0.6;
         if (arg === 'sfx') s.sfx = s.sfx > 0 ? 0 : 0.8;
-        if (arg === 'crt') s.crt = !s.crt;
         this.meta.save();
         this.applySettings();
         this.sfx.click();
         const btn = this.screens.querySelector<HTMLElement>(`[data-action="toggle"][data-arg="${arg}"]`);
         if (btn) {
-          const label = arg === 'music' ? `Music ${s.music > 0 ? 'On' : 'Off'}` : arg === 'sfx' ? `SFX ${s.sfx > 0 ? 'On' : 'Off'}` : `CRT ${s.crt ? 'On' : 'Off'}`;
+          const label = arg === 'music' ? `Music ${s.music > 0 ? 'On' : 'Off'}` : `SFX ${s.sfx > 0 ? 'On' : 'Off'}`;
           btn.textContent = label;
         }
         break;

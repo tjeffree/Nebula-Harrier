@@ -29,6 +29,8 @@ export interface Archetype {
   unlockCost: number;
   accent: number;
   trim: number;
+  /** Colour of this frame's energy bolts. */
+  bolt: number;
   base: Pick<RunStats, 'damage' | 'fireInterval' | 'projSpeed' | 'jitter' | 'heatPerShot' | 'dashCooldown' | 'dashInvuln'>;
 }
 
@@ -38,8 +40,9 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     name: 'Striker',
     blurb: 'Heavy single lance. High damage per bolt, steady cadence.',
     unlockCost: 0,
-    accent: 0x29f0ff,
-    trim: 0xff2bd6,
+    accent: 0xff4f6d,
+    trim: 0x2fd3ff,
+    bolt: 0xffd23f,
     base: { damage: 1.6, fireInterval: 0.13, projSpeed: 120, jitter: 0, heatPerShot: 0.035, dashCooldown: 0.85, dashInvuln: 0.14 },
   },
   TEMPEST: {
@@ -47,8 +50,9 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     name: 'Tempest',
     blurb: 'Rapid scatter-fire. Lower damage, relentless volume.',
     unlockCost: 400,
-    accent: 0xffb347,
-    trim: 0x5cff9d,
+    accent: 0xff9a1f,
+    trim: 0x3ee07a,
+    bolt: 0xff7a3d,
     base: { damage: 0.95, fireInterval: 0.07, projSpeed: 130, jitter: 0.03, heatPerShot: 0.022, dashCooldown: 0.85, dashInvuln: 0.14 },
   },
   PHANTOM: {
@@ -56,8 +60,9 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     name: 'Phantom',
     blurb: 'Phase-shift frame. Short dash cooldown, long invulnerability.',
     unlockCost: 900,
-    accent: 0xb48cff,
-    trim: 0x29f0ff,
+    accent: 0x8f6bff,
+    trim: 0xff7ad9,
+    bolt: 0xff5cf0,
     base: { damage: 1.25, fireInterval: 0.11, projSpeed: 125, jitter: 0, heatPerShot: 0.03, dashCooldown: 0.45, dashInvuln: 0.3 },
   },
 };

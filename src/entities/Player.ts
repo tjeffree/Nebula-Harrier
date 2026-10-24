@@ -57,6 +57,7 @@ export class Player implements PlayerTarget {
   private dashSpin = 0;
   private dashSpinDir = 1;
   private jetAcc = 0;
+  private boltColor = 0xffd23f;
 
   constructor(private readonly scene: THREE.Scene) {}
 
@@ -76,6 +77,7 @@ export class Player implements PlayerTarget {
       for (const m of this.model.materials) m.dispose();
     }
     this.model = createPlayerModel(a.accent, a.trim);
+    this.boltColor = a.bolt;
     this.scene.add(this.model.root);
   }
 
@@ -160,12 +162,12 @@ export class Player implements PlayerTarget {
           -dash.x * 10 + (Math.random() - 0.5) * 3,
           -dash.y * 10 + (Math.random() - 0.5) * 3,
           4,
-          0.35,
-          1.0,
-          0.1,
-          0.6,
-          1.4,
-          2,
+          0.45,
+          0.9,
+          0.2,
+          0.92,
+          0.97,
+          1,
         );
       }
     }
@@ -225,9 +227,10 @@ export class Player implements PlayerTarget {
       _b.copy(_dir).applyAxisAngle(UP, off + (Math.random() - 0.5) * s.jitter);
       _b.y += (Math.random() - 0.5) * s.jitter;
       _b.normalize().multiplyScalar(s.projSpeed);
-      ctx.projectiles.spawnPlayer(_a.x, _a.y, _a.z, _b.x, _b.y, _b.z, dmg, ways > 1 ? 0.9 : 1.1);
+      ctx.projectiles.spawnPlayer(_a.x, _a.y, _a.z, _b.x, _b.y, _b.z, dmg, ways > 1 ? 0.9 : 1.1, this.boltColor);
     }
-    ctx.particles.emit(_a.x, _a.y, _a.z, 0, 0, -4, 0.06, 1.2, 0.4, 0.6, 1.6, 2);
+    const bc = this.boltColor;
+    ctx.particles.emit(_a.x, _a.y, _a.z, 0, 0, -4, 0.07, 1.1, 0.4, ((bc >> 16) & 255) / 255, ((bc >> 8) & 255) / 255, (bc & 255) / 255, ATLAS.SPARK);
     ctx.sfx.laser(ways > 1 ? 1.15 : 1);
     this.heat += s.heatPerShot;
     if (this.heat >= 1) {
@@ -291,12 +294,12 @@ export class Player implements PlayerTarget {
           (Math.random() - 0.5) * 1.5 - this.vel.x * 0.3,
           -3 * thrust - Math.random() * 2,
           6 + Math.random() * 4,
-          0.22,
-          0.55 * thrust,
-          0.05,
-          0.5,
-          1.1,
-          2.0,
+          0.2,
+          0.35 * thrust,
+          0.65 * thrust,
+          1,
+          1,
+          1,
         );
       }
     }
@@ -307,10 +310,10 @@ export class Player implements PlayerTarget {
     if (!this.alive) return;
     if (this.shieldUp) {
       const p = 1 + Math.sin(time * 6) * 0.05;
-      batch.push(this.pos.x, this.pos.y + CHEST, this.pos.z + 0.4, ATLAS.RING, 2.6 * p, 2.6 * p, time, 0.4, 1.0, 1.6, 0.55);
+      batch.push(this.pos.x, this.pos.y + CHEST, this.pos.z + 0.4, ATLAS.RING, 2.6 * p, 2.6 * p, time, 0.2, 0.85, 1, 0.6);
     }
     if (this.overheated) {
-      batch.push(this.pos.x + 0.6, this.pos.y + 1.5, this.pos.z, ATLAS.GLOW, 1.4, 1.4, 0, 2, 0.4, 0.2, 0.5 + 0.5 * Math.sin(time * 30));
+      batch.push(this.pos.x + 0.6, this.pos.y + 1.6 + Math.sin(time * 9) * 0.1, this.pos.z, ATLAS.PUFF, 1.3, 1.3, time, 0.85, 0.85, 0.9, 0.6 + 0.3 * Math.sin(time * 20));
     }
   }
 }

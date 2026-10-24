@@ -18,7 +18,8 @@ export interface GameContext {
   fx: ModifierEffects;
   enemies: EnemyManager;
   wyrmWriter: InstanceWriter;
-  edgeColor: THREE.Color;
+  /** Body colour for instanced swarm enemies (sector accent). */
+  accentColor: THREE.Color;
 }
 
 const _v = new THREE.Vector3();

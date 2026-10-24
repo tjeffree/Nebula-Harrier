@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createCrtMaterial, globalUniforms } from '../procgen/Shaders';
+import { createGradeMaterial, globalUniforms } from '../procgen/Shaders';
 
 export const CAMERA_POS = new THREE.Vector3(0, 3.5, 9.0);
 export const CAMERA_TARGET = new THREE.Vector3(0, 1.5, -60.0);
@@ -19,7 +19,7 @@ export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
-  readonly crt: THREE.ShaderMaterial;
+  readonly post: THREE.ShaderMaterial;
   private readonly rt: THREE.WebGLRenderTarget;
   private readonly postScene = new THREE.Scene();
   private readonly postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -40,13 +40,13 @@ export class Engine {
   constructor(container: HTMLElement) {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({
-      antialias: false,
+      antialias: false, // MSAA happens on the scene render target instead
       powerPreference: 'high-performance',
       alpha: false,
       stencil: false,
       depth: true,
     });
-    this.renderer.setClearColor(0x05010b, 1);
+    this.renderer.setClearColor(0xcdeeff, 1);
     this.renderer.autoClear = true;
     this.renderer.info.autoReset = false;
     container.appendChild(this.renderer.domElement);
@@ -60,10 +60,11 @@ export class Engine {
       magFilter: THREE.LinearFilter,
       depthBuffer: true,
       stencilBuffer: false,
+      samples: 4,
     });
-    this.crt = createCrtMaterial();
-    this.crt.uniforms.tDiffuse.value = this.rt.texture;
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.crt);
+    this.post = createGradeMaterial();
+    this.post.uniforms.tDiffuse.value = this.rt.texture;
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.post);
     quad.frustumCulled = false;
     this.postScene.add(quad);
 
@@ -94,10 +95,16 @@ export class Engine {
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = `${w}px`;
     this.renderer.domElement.style.height = `${h}px`;
+    // MSAA on the scene target only while the device keeps up.
+    const samples = this.quality >= 0.75 ? 4 : 0;
+    if (this.rt.samples !== samples) {
+      this.rt.samples = samples;
+      this.rt.dispose();
+    }
     const bw = Math.floor(w * pr);
     const bh = Math.floor(h * pr);
     this.rt.setSize(bw, bh);
-    (this.crt.uniforms.uRes.value as THREE.Vector2).set(bw, bh);
+    (this.post.uniforms.uRes.value as THREE.Vector2).set(bw, bh);
     this.camera.aspect = w / h;
     this.updateProjection();
   }

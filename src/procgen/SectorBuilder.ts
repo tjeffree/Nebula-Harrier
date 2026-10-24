@@ -67,17 +67,70 @@ export function resolveModifiers(mods: readonly ModifierId[]): ModifierEffects {
 
 export interface SectorPalette {
   name: string;
+  /** Primary accent: swarm enemies, flowers, planet. */
   a: number;
+  /** Secondary accent: boss trim, planet rings. */
   b: number;
-  fog: number;
+  skyTop: number;
+  /** Horizon haze, used for fog. */
+  haze: number;
+  groundA: number;
+  groundB: number;
+  /** Tree canopy colours. */
+  foliage: number[];
 }
 
 export const PALETTES: SectorPalette[] = [
-  { name: 'Magenta Drift', a: 0x29f0ff, b: 0xff2bd6, fog: 0x1a0630 },
-  { name: 'Ember Reach', a: 0xffb347, b: 0xff3d5a, fog: 0x2a0812 },
-  { name: 'Viridian Shoal', a: 0x5cff9d, b: 0x2b8cff, fog: 0x041a24 },
-  { name: 'Ultraviolet Rift', a: 0xb48cff, b: 0xff2bd6, fog: 0x14052e },
-  { name: 'Solar Abyss', a: 0xfff07a, b: 0xff5b2b, fog: 0x260a04 },
+  {
+    name: 'Azure Meadows',
+    a: 0xff4f9a,
+    b: 0xffc93c,
+    skyTop: 0x2f8cff,
+    haze: 0xcdeeff,
+    groundA: 0x86d95c,
+    groundB: 0x6cc84d,
+    foliage: [0x4fbf4a, 0x7fd85a, 0xff9ec8],
+  },
+  {
+    name: 'Coral Dunes',
+    a: 0x23c9c0,
+    b: 0xff5e78,
+    skyTop: 0x4d7dff,
+    haze: 0xffe0c4,
+    groundA: 0xffc27a,
+    groundB: 0xf7ad5e,
+    foliage: [0xff7a8a, 0xffb347, 0x3cc9a6],
+  },
+  {
+    name: 'Lagoon Isles',
+    a: 0xff7a3d,
+    b: 0xfff35c,
+    skyTop: 0x22b8ff,
+    haze: 0xd8fff6,
+    groundA: 0x56dcbc,
+    groundB: 0x3ec9a8,
+    foliage: [0x2fbf71, 0x9be36d, 0xffd84d],
+  },
+  {
+    name: 'Candy Twilight',
+    a: 0xffd84d,
+    b: 0x48e0ff,
+    skyTop: 0x6d5cff,
+    haze: 0xffc4e6,
+    groundA: 0xc6a2ff,
+    groundB: 0xb08cf5,
+    foliage: [0xff7ad9, 0x7fe0ff, 0xfff07a],
+  },
+  {
+    name: 'Sunburst Plateau',
+    a: 0xe84393,
+    b: 0x2ec4ff,
+    skyTop: 0x3aa8ff,
+    haze: 0xfff3cc,
+    groundA: 0xffdd6b,
+    groundB: 0xf5c94a,
+    foliage: [0xff8a3d, 0xe84393, 0x6ad35a],
+  },
 ];
 
 export interface SectorNode {
