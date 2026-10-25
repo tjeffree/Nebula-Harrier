@@ -19,6 +19,7 @@
         --ink-dim: rgba(255, 248, 236, 0.72);
         --ink-faint: rgba(255, 248, 236, 0.25);
         --amber: #ffb347;
+        --lash: #8ff4ff;
         --alert: #ff5a3d;
         --ok: #c4d98a;
         --glass: rgba(16, 12, 9, 0.7);
@@ -52,6 +53,9 @@
       #sec-row.ready #sec-name { color: var(--amber); }
       #sec-row.empty { opacity: 0.45; }
       #dash-fill { background: var(--ink); opacity: 0.8; }
+      #whip-fill { background: var(--lash); opacity: 0.55; }
+      #whip-row.ready #whip-fill { opacity: 1; box-shadow: 0 0 9px rgba(143, 244, 255, 0.9); }
+      #whip-row.ready .k { color: var(--lash); }
       .sector-read { position: absolute; top: max(16px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); display: grid; justify-items: center; gap: 2px; }
       .sector-read::after { content: ""; width: 150px; height: 1px; margin-top: 4px; background: linear-gradient(90deg, transparent, rgba(255, 248, 236, 0.8), transparent); }
       .timer { font-weight: 500; font-size: 34px; line-height: 1; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
@@ -159,6 +163,10 @@
         border: 1px solid rgba(255, 248, 236, 0.5); font: 600 12px var(--cond); letter-spacing: 0.16em; text-indent: 0.16em; text-transform: uppercase; color: var(--ink-dim); }
       .alt-btn.ready { border-color: var(--amber); color: var(--amber); background: rgba(255, 179, 71, 0.22); box-shadow: 0 0 14px rgba(255, 179, 71, 0.5); }
       .alt-btn.empty { opacity: 0.35; }
+      /* Whip: sits above the fire button, cyan for hard light. */
+      .whip-btn { right: calc(max(28px, env(safe-area-inset-right)) + 13px); bottom: calc(max(36px, env(safe-area-inset-bottom)) + 112px);
+        background: conic-gradient(rgba(143, 244, 255, 0.38) calc(var(--fill) * 360deg), rgba(16, 12, 9, 0.22) 0); }
+      .whip-btn.ready { border-color: var(--lash); color: var(--lash); background: rgba(143, 244, 255, 0.2); box-shadow: 0 0 14px rgba(143, 244, 255, 0.5); }
 
       /* ---------- Orientation lock overlay ---------- */
       #rotate { position: absolute; inset: 0; z-index: 50; display: none; background: #1a140e;
@@ -183,7 +191,8 @@
       <div id="game"></div>
       <div id="hud">
         <div class="vitals">
-          <div class="vrow"><span class="k">Hull</span><span class="n" id="hp-num">100</span><div class="bar" id="hp-bar"><i id="hp-fill"></i></div></div>
+          <div class="vrow"><span class="k">Health</span><span class="n" id="hp-num">100</span><div class="bar" id="hp-bar"><i id="hp-fill"></i></div></div>
+          <div class="vrow" id="whip-row"><span class="k">Whip</span><span class="n"></span><div class="bar"><i id="whip-fill"></i></div></div>
           <div class="vrow" id="sec-row"><span class="k" id="sec-name">—</span><span class="n" id="sec-num"></span><div class="bar"><i id="sec-fill"></i></div></div>
           <div class="vrow"><span class="k">Boost</span><span class="n"></span><div class="bar"><i id="dash-fill"></i></div></div>
         </div>
@@ -197,7 +206,7 @@
         </div>
         <div id="boons"></div>
         <div id="boss">
-          <div class="k">Capital contact</div>
+          <div class="k">Apex beast</div>
           <div id="boss-name"></div>
           <div class="bar"><i id="boss-fill"></i></div>
         </div>

@@ -55,7 +55,13 @@ export class Player implements PlayerTarget {
   private dashSpin = 0;
   private dashSpinDir = 1;
   private jetAcc = 0;
+  private sprayAcc = 0;
   private boltColor = 0xffd23f;
+  /** Flying over open sea: skim instead of running. */
+  overWater = false;
+  /** Whip swing pose from the whip (-1..1), drives the left arm. */
+  whipPose = 0;
+  whipDrawn = false;
 
   constructor(private readonly scene: THREE.Scene) {}
 
@@ -233,6 +239,13 @@ export class Player implements PlayerTarget {
     return out.set(this.pos.x, this.pos.y + CHEST + 0.6, this.pos.z - 0.5);
   }
 
+  /** Where the whip lash leaves her hand; held at chest height so the strike band is predictable. */
+  whipOrigin(out: THREE.Vector3): THREE.Vector3 {
+    this.model.whipHand.getWorldPosition(out);
+    out.y = this.pos.y + CHEST + 0.3;
+    return out;
+  }
+
   private animate(dt: number, ctx: PlayerUpdateContext): void {
     const m = this.model;
     m.root.position.copy(this.pos);
@@ -243,7 +256,7 @@ export class Player implements PlayerTarget {
     m.root.rotation.x = this.vel.y * 0.02;
     m.root.rotation.y = this.vel.x * 0.015;
 
-    const grounded = this.pos.y <= GROUND_Y;
+    const grounded = this.pos.y <= GROUND_Y && !this.overWater;
     if (grounded) {
       // Running gait driven by rail speed.
       this.runPhase += dt * ctx.railSpeed * 0.32;
@@ -267,6 +280,31 @@ export class Player implements PlayerTarget {
       m.body.position.y += (Math.sin(performance.now() * 0.004) * 0.05 - m.body.position.y) * k;
       m.body.rotation.x += (-0.3 - m.body.rotation.x) * k;
     }
+    // Whip arm: raised forward and swept across the body with the lash.
+    const wp = this.whipPose;
+    if (wp !== 0) {
+      m.armL.rotation.x = -1.35;
+      m.armL.rotation.y = wp * 0.9;
+      m.armL.rotation.z = -0.12 - wp * 0.25;
+      m.body.rotation.y = wp * 0.3;
+    } else {
+      const k = Math.min(1, dt * 10);
+      m.armL.rotation.y += -m.armL.rotation.y * k;
+      m.armL.rotation.z += (-0.12 - m.armL.rotation.z) * k;
+      m.body.rotation.y += -m.body.rotation.y * k;
+    }
+    m.whipGlow.uniforms.uFlash.value = this.whipDrawn ? 0.6 : 0;
+    // Ponytail and scarf stream behind, lifting with speed and flicking as she moves.
+    const t = performance.now() * 0.001;
+    const lift = grounded ? 0.15 : 0.55;
+    for (let i = 0; i < m.hair.length; i++) {
+      m.hair[i].rotation.x = (i === 0 ? 0.9 - lift : 0.15 - lift * 0.15) + Math.sin(t * 9 - i * 1.1) * 0.08 + this.vel.y * 0.01;
+      m.hair[i].rotation.y = Math.sin(t * 6 - i * 0.9) * 0.12 - this.vel.x * 0.012;
+    }
+    for (let i = 0; i < m.scarf.length; i++) {
+      m.scarf[i].rotation.x = (i === 0 ? 0.2 - lift * 0.4 : 0.05) + Math.sin(t * 11 - i * 1.3) * 0.18;
+      m.scarf[i].rotation.y = Math.sin(t * 7 - i * 1.0) * 0.25 - this.vel.x * 0.015;
+    }
     // Thrust flames flicker, and burn shorter while running on the ground.
     const thrustLen = grounded ? 0.45 : 1;
     for (const f of m.flames) {
@@ -276,6 +314,17 @@ export class Player implements PlayerTarget {
 
     // Hit flicker.
     m.root.visible = this.hitInvuln <= 0 || Math.floor(this.hitInvuln * 20) % 2 === 0;
+
+    // Skimming the sea: the jets kick up a wake of spray.
+    if (this.overWater && this.pos.y < 2.2) {
+      this.sprayAcc += dt;
+      const k = 1 - this.pos.y / 2.2;
+      while (this.sprayAcc >= 0.025) {
+        this.sprayAcc -= 0.025;
+        const sx = this.pos.x + (Math.random() - 0.5) * 0.8;
+        ctx.particles.emit(sx, 0.1, this.pos.z + 0.6, (Math.random() - 0.5) * 4, 2 + Math.random() * 4 * k, 6 + Math.random() * 6, 0.4, 0.25, 0.8 * k + 0.2, 0.9, 0.95, 1, undefined, 2.5);
+      }
+    }
 
     // Jet nacelle exhaust (vector particles).
     this.jetAcc += dt;

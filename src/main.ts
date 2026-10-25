@@ -8,11 +8,14 @@ import { Player } from './entities/Player';
 import { Ordnance, SECONDARIES } from './entities/Ordnance';
 import { ArcRenderer, ParticleSystem, ProjectileSystem, SpriteBatch, type Hittable } from './entities/ProjectileSystem';
 import { Enemy, EnemyManager, InstanceWriter, type GameContext } from './entities/EnemyBase';
-import { DroneWyrm, NebulaTitan, PylonSentinel, SectorBoss, TreeField } from './entities/EnemyVariants';
-import { ATLAS, createBlobShadow, createGround, createSky, createTreeInstanced, createWyrmInstanced, loadAtlas } from './procgen/ModelFactory';
+import { BeastBoss, Boss, HydraStalk, IdolBoss, Leaper, Mammoth, PropField, Razorwing, Serpent } from './entities/EnemyVariants';
+import { HardLightWhip } from './entities/Whip';
+import { ATLAS, createBlobShadow, createGround, createSky, loadAtlas } from './procgen/ModelFactory';
+import { createSwarmMeshes, type SwarmMeshes } from './procgen/BeastModels';
+import { createPropMeshes } from './procgen/PropModels';
 import { globalUniforms } from './procgen/Shaders';
 import {
-  BOSS_NAMES,
+  BIOMES,
   ELITE_MODIFIERS,
   PALETTES,
   SECTOR_COUNT,
@@ -21,6 +24,9 @@ import {
   generateNodeChoices,
   mulberry32,
   resolveModifiers,
+  type Biome,
+  type BiomeId,
+  type PropKind,
   type SectorNode,
   type SectorPalette,
   type Spawner,
@@ -36,6 +42,8 @@ const QUICK = params.has('quick');
 const GOD = params.has('god');
 const AUTOSTART = params.has('autostart');
 const START_SECTOR = Math.max(1, Math.min(SECTOR_COUNT, Number(params.get('sector')) || 1));
+const FORCE_BIOME = BIOMES[params.get('biome') as BiomeId] as Biome | undefined;
+const SKIP_TO_BOSS = params.has('boss');
 const BASE_RAIL_SPEED = 38;
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -62,8 +70,13 @@ class Game {
   private readonly ordnance = new Ordnance();
   private readonly launchAt = new THREE.Vector3();
   private readonly enemies = new EnemyManager();
-  private readonly trees: TreeField;
+  private readonly props: PropField;
+  private readonly swarmMeshes: SwarmMeshes;
+  private readonly whip = new HardLightWhip();
+  private readonly whipAt = new THREE.Vector3();
   private readonly foliage: THREE.Color[] = [];
+  private biome: Biome = BIOMES.ocean;
+  private visited: BiomeId[] = [];
   private readonly shadow: THREE.Mesh;
   private readonly sky: THREE.Mesh;
   private readonly sunDir = new THREE.Vector3();
@@ -78,7 +91,7 @@ class Game {
   private sector = 1;
   private node: SectorNode | null = null;
   private director: WaveDirector | null = null;
-  private boss: SectorBoss | null = null;
+  private boss: Boss | null = null;
   private sectorTime = 0;
   private score = 0;
   private kills = 0;
@@ -111,16 +124,18 @@ class Game {
     scene.add(this.sky);
     scene.fog = new THREE.Fog(0xe2b38a, 45, 235);
     scene.add(createGround());
-    const treeMeshes = createTreeInstanced(96);
-    scene.add(treeMeshes.trunks, treeMeshes.canopies);
-    this.trees = new TreeField(treeMeshes.trunks, treeMeshes.canopies);
+    const propMeshes = createPropMeshes(64);
+    for (const k of propMeshes) scene.add(k.a, k.b);
+    this.props = new PropField(propMeshes);
     this.shadow = createBlobShadow();
     scene.add(this.shadow);
-    const wyrmMesh = createWyrmInstanced(512);
-    scene.add(wyrmMesh);
+    this.swarmMeshes = createSwarmMeshes();
+    const sw = this.swarmMeshes;
+    scene.add(sw.flockBody, sw.wingL, sw.wingR, sw.leaper, sw.segment);
     this.batch = new SpriteBatch(8192, loadAtlas());
     scene.add(this.batch.mesh);
     scene.add(this.arcs.lines);
+    scene.add(this.whip.group);
 
     this.player = new Player(scene);
     this.player.setArchetype(ARCHETYPES[this.meta.profile.selected_archetype]);
@@ -139,22 +154,36 @@ class Game {
       sfx: this.sfx,
       fx: resolveModifiers([]),
       enemies: this.enemies,
-      wyrmWriter: new InstanceWriter(wyrmMesh),
-      accentColor: new THREE.Color(PALETTES[0].a),
+      swarm: {
+        flockBody: new InstanceWriter(sw.flockBody),
+        wingL: new InstanceWriter(sw.wingL),
+        wingR: new InstanceWriter(sw.wingR),
+        leaper: new InstanceWriter(sw.leaper),
+        segment: new InstanceWriter(sw.segment),
+      },
+      biome: BIOMES.ocean,
+      accentColor: new THREE.Color(BIOMES.ocean.marking),
     };
 
     this.spawner = {
-      spawnWyrmGroup: (n, rng) => this.spawnWyrms(n, rng),
-      spawnSentinel: (rng) => {
-        const x = (rng() < 0.5 ? -1 : 1) * (2.5 + rng() * 7);
-        this.enemies.add(new PylonSentinel(this.ctx, x, -60 + rng() * 14));
+      spawnFlock: (n, rng) => this.spawnFlock(n, rng),
+      spawnLeapers: (n, rng) => {
+        const side = rng() < 0.5 ? -1 : 1;
+        const z = -26 - rng() * 18;
+        for (let i = 0; i < n; i++) this.enemies.add(new Leaper(this.ctx, side, z - i * 2.5, 4.5 + rng() * 3, i * 0.3, 2.3 + rng() * 0.5));
       },
-      spawnTitan: (rng) => this.enemies.add(new NebulaTitan(this.ctx, (rng() - 0.5) * 10, 3.5 + rng() * 2)),
-      spawnSpire: (x, s) => this.trees.spawn(x, s),
+      spawnStalk: (rng) => {
+        const x = (rng() < 0.5 ? -1 : 1) * (2.5 + rng() * 7);
+        this.enemies.add(new HydraStalk(this.ctx, x, -60 + rng() * 14));
+      },
+      spawnSerpent: (rng) => this.enemies.add(new Serpent(this.ctx, (rng() - 0.5) * 8, 3.5 + rng() * 2.5, this.biome.water > 0)),
+      spawnMammoth: (rng) => this.enemies.add(new Mammoth(this.ctx, (rng() - 0.5) * 8)),
+      spawnProp: (x, s, rng) => this.spawnProp(x, s, rng),
       aliveCost: () => this.enemies.aliveCost(),
     };
 
     this.projectiles.onPlayerBulletHit = (t, x, y, z, dmg) => this.onBulletHit(t, x, y, z, dmg);
+    this.applyBiome(BIOMES.ocean);
     this.applyPalette(PALETTES[0]);
     this.applySettings();
     this.bindEvents();
@@ -180,6 +209,7 @@ class Game {
       hullTier: this.meta.tier('hull_plating'),
       ordnanceTier: this.meta.tier('ordnance_bay'),
       fluxTier: this.meta.tier('core_flux'),
+      whipTier: this.meta.tier('whip_emitter'),
     };
   }
 
@@ -190,8 +220,9 @@ class Game {
     bus.on('enemy:killed', (e) => {
       if (e.kind !== 'boss') this.kills++;
       this.score += Math.round(e.points * this.stats.scoreMul);
-      this.sfx.explosion(e.kind === 'titan' ? 1.6 : e.kind === 'sentinel' ? 1.1 : 0.7);
-      this.shake = Math.max(this.shake, e.kind === 'titan' ? 0.5 : 0.15);
+      const big = e.kind === 'mammoth' ? 1.6 : e.kind === 'serpent' ? 1.3 : e.kind === 'stalk' ? 1.1 : 0.7;
+      this.sfx.explosion(big);
+      this.shake = Math.max(this.shake, big > 1.2 ? 0.5 : 0.15);
       if (this.state === 'sector' || this.state === 'boss') this.ordnance.maybeDrop(e.x, e.y, e.z, e.kind);
     });
     this.ordnance.onPickup = (id) => {
@@ -215,6 +246,7 @@ class Game {
       this.setState('dying');
     });
     bus.on('player:dash', (e) => {
+      if (this.stats.dashReadiesWhip > 0) this.whip.ready();
       if (this.stats.dashMines <= 0) return;
       for (let i = 0; i < this.stats.dashMines; i++) {
         this.mines.push({ x: e.x + (i - 1) * 1.6, y: e.y, z: this.player.pos.z - 4 - i * 3.5, life: 6 });
@@ -225,7 +257,7 @@ class Game {
       $('#boss').classList.add('on');
     });
     bus.on('boss:phase', (e) => {
-      this.showBanner(`PHASE ${e.phase}`, 'ARMOR BREACHED', true);
+      this.showBanner(`PHASE ${e.phase}`, e.phase === 3 ? 'IT IS FRENZIED' : 'IT IS ENRAGED', true);
       this.sfx.explosion(1.5);
       this.shake = 0.8;
     });
@@ -291,6 +323,9 @@ class Game {
     this.stats = this.boons.computeStats(arch, this.metaBonuses());
     this.player.reset(this.stats);
     this.ordnance.reset(this.meta.tier('ordnance_bay') > 0 ? 'nova' : null);
+    this.whip.reset();
+    this.whip.setColor(arch.trim);
+    this.visited = [];
     this.runSeed = (Math.random() * 1e9) | 0;
     this.sector = START_SECTOR;
     this.score = 0;
@@ -340,7 +375,8 @@ class Game {
     this.projectiles.clearAll();
     this.particles.clear();
     this.arcs.clear();
-    this.trees.clear();
+    this.props.clear();
+    this.whip.reset();
     this.mines.length = 0;
     this.ordnance.clearField();
     this.boss = null;
@@ -348,18 +384,42 @@ class Game {
   }
 
   private startSector(node: SectorNode): void {
+    if (FORCE_BIOME) node = { ...node, biome: FORCE_BIOME };
     this.node = node;
     this.ctx.sector = this.sector;
     this.ctx.fx = resolveModifiers(node.modifiers);
+    this.applyBiome(node.biome);
     this.applyPalette(node.palette);
-    this.director = new WaveDirector(this.sector, node.omega, this.ctx.fx, node.seed);
-    this.sectorTime = 0;
+    this.director = new WaveDirector(this.sector, node.omega, this.ctx.fx, node.biome, node.seed);
+    this.sectorTime = SKIP_TO_BOSS ? (QUICK ? 10 : SECTOR_DURATION) : 0;
     this.music.setSeed(node.seed);
     this.music.setMode('run');
     this.sfx.startEngine();
     this.input.flush();
     this.setState('sector');
-    this.showBanner(`SECTOR ${this.sector}`, node.title.toUpperCase());
+    this.showBanner(`SECTOR ${this.sector}`, `${node.title} · ${node.biome.name}`.toUpperCase());
+  }
+
+  /** Ground, scenery and wildlife for a biome (lighting comes from the palette). */
+  private applyBiome(b: Biome): void {
+    this.biome = b;
+    this.ctx.biome = b;
+    const g = globalUniforms;
+    g.uGroundA.value.set(b.groundA);
+    g.uGroundB.value.set(b.groundB);
+    g.uWater.value = b.water;
+    g.uWall.value = b.wall;
+    g.uChecker.value = b.checker;
+    g.uLava.value = b.lava;
+    g.uRidge.value = b.ridge;
+    g.uIsland.value = b.water > 0 ? 0.25 : 0;
+    this.props.setRock(b.groundB);
+    this.foliage.length = 0;
+    for (const c of b.foliage) this.foliage.push(new THREE.Color(c));
+    const sw = this.swarmMeshes;
+    for (const m of [sw.flockBody, sw.wingL, sw.wingR, sw.leaper, sw.segment]) (m.material as THREE.MeshStandardMaterial).color.set(b.hide);
+    this.ctx.accentColor.set(b.marking);
+    this.player.overWater = b.water > 0;
   }
 
   private applyPalette(p: SectorPalette): void {
@@ -369,8 +429,6 @@ class Game {
     g.uFogColor.value.set(p.haze);
     g.uSkyTop.value.set(p.skyTop);
     g.uHorizon.value.set(p.horizon);
-    g.uGroundA.value.set(p.groundA);
-    g.uGroundB.value.set(p.groundB);
     g.uSunColor.value.set(p.sun);
     g.uSunDir.value.set(...p.sunDir).normalize();
     g.uSunSize.value = p.sunSize;
@@ -402,14 +460,23 @@ class Game {
     e.setBloom(p.bloom, 0.55, 0.88);
     e.setGrade(p.grade, p.exposure);
     e.updateEnvironment(this.sky);
-
-    (this.trees.trunks.material as THREE.MeshStandardMaterial).color.set(p.groundB);
-    this.ctx.accentColor.set(p.a);
-    this.foliage.length = 0;
-    for (const c of p.foliage) this.foliage.push(new THREE.Color(c));
   }
 
-  private spawnWyrms(n: number, rng: () => number): void {
+  private spawnProp(x: number, s: number, rng: () => number): void {
+    const opts = Object.entries(this.biome.props) as [PropKind, number][];
+    let r = rng() * opts.reduce((a, o) => a + o[1], 0);
+    let kind = opts[0][0];
+    for (const [k, w] of opts) {
+      r -= w;
+      if (r <= 0) {
+        kind = k;
+        break;
+      }
+    }
+    this.props.spawn(kind, x, kind === 'moai' ? s * 1.25 : s);
+  }
+
+  private spawnFlock(n: number, rng: () => number): void {
     const side = rng() < 0.5 ? -1 : 1;
     const baseY = 1.5 + rng() * 4.5;
     const formation = Math.floor(rng() * 3);
@@ -423,21 +490,21 @@ class Game {
       ay = Math.max(0.8, Math.min(7.2, ay));
       const anchor = new THREE.Vector3(ax, ay, -28 - rng() * 14);
       const start = new THREE.Vector3(ax * 1.4 + side * 10, ay + 3 + rng() * 4, -175);
-      this.enemies.add(new DroneWyrm(this.ctx, start, anchor, i * 0.22, side));
+      this.enemies.add(new Razorwing(this.ctx, start, anchor, i * 0.22, side));
     }
   }
 
   private spawnBoss(): void {
-    const pal = this.node?.palette ?? PALETTES[0];
-    const name = BOSS_NAMES[(this.sector - 1) % BOSS_NAMES.length];
-    const boss = new SectorBoss(this.ctx, name, pal.a, pal.b);
-    boss.onSummon = (n) => this.spawnWyrms(n, Math.random);
+    const { kind, name } = this.biome.boss;
+    const boss = kind === 'stonehead' ? new IdolBoss(this.ctx, name) : new BeastBoss(this.ctx, name, kind);
+    boss.onSummon = (n) => this.spawnFlock(n, Math.random);
     this.boss = boss;
     this.enemies.add(boss);
   }
 
   private finishSector(): void {
     this.sectorsCleared++;
+    this.visited.push(this.biome.id);
     this.coresBonus += 60 * this.sector * (this.node?.rewardMul ?? 1);
     bus.emit('sector:clear', { sector: this.sector });
     this.clearField();
@@ -477,6 +544,25 @@ class Game {
       for (const n of near) {
         this.arcs.add(e.pos.x, e.pos.y, e.pos.z, n.pos.x, n.pos.y, n.pos.z);
         n.damage(dmg * s.chainDamageMul, this.ctx);
+      }
+      if (near.length) this.sfx.chain();
+    }
+  }
+
+  /** A whip strike landing: heavy hit-sparks, a jolt of shake, optional arc lightning. */
+  private onWhipHit(e: Enemy, dmg: number): void {
+    const p = e.pos;
+    e.damage(dmg, this.ctx);
+    const c = new THREE.Color(ARCHETYPES[this.meta.profile.selected_archetype].trim);
+    this.particles.burst(p.x, p.y, p.z, 14, 12, c.r * 2, c.g * 2, c.b * 2, 0.45);
+    this.particles.emit(p.x, p.y, p.z, 0, 0, 0, 0.25, 1, 5, c.r * 2, c.g * 2, c.b * 2, ATLAS.RING, 0);
+    this.sfx.hit();
+    this.shake = Math.max(this.shake, 0.18);
+    if (this.stats.whipChain > 0) {
+      const near = this.enemies.nearest(p.x, p.y, p.z, 7, 3, e, this.chainBuf);
+      for (const n of near) {
+        this.arcs.add(p.x, p.y, p.z, n.pos.x, n.pos.y, n.pos.z);
+        n.damage(dmg * 0.5, this.ctx);
       }
       if (near.length) this.sfx.chain();
     }
@@ -566,7 +652,18 @@ class Game {
     this.runStateLogic(dt);
 
     this.batch.begin();
-    this.ctx.wyrmWriter.begin();
+    const sw = this.ctx.swarm;
+    sw.flockBody.begin();
+    sw.wingL.begin();
+    sw.wingR.begin();
+    sw.leaper.begin();
+    sw.segment.begin();
+    // The main island looms ever larger across the sea crossing.
+    if (this.biome.water > 0 && this.state !== 'title') {
+      const dur = QUICK ? 10 : SECTOR_DURATION;
+      const prog = this.state === 'sector' ? this.sectorTime / dur : 1;
+      globalUniforms.uIsland.value = 0.25 + 0.75 * Math.min(1, prog);
+    }
 
     const controlsEnabled = playing && this.state !== 'warp' && this.state !== 'dying';
     this.player.update(dt, {
@@ -583,6 +680,18 @@ class Game {
       const at = this.player.launchPoint(this.launchAt);
       if (this.ordnance.tryFire(at.x, at.y, at.z, this.ordnanceCtx())) this.shake = Math.max(this.shake, 0.35);
       else this.sfx.deny();
+    }
+    if (this.input.consumeMelee() && controlsEnabled && this.player.alive) {
+      if (this.whip.tryStrike(this.stats)) this.sfx.whip();
+    }
+    this.player.whipPose = this.whip.pose;
+    this.player.whipDrawn = this.whip.swinging;
+    if (this.player.alive) {
+      this.whip.update(dt, this.player.whipOrigin(this.whipAt), {
+        game: this.ctx,
+        stats: this.stats,
+        onHit: (e, dmg) => this.onWhipHit(e, dmg),
+      });
     }
     if (GOD) this.player.hp = this.player.stats.maxHp;
 
@@ -602,7 +711,7 @@ class Game {
       this.ordnance.update(dt, this.player.x, this.player.y, this.player.z, this.ordnanceCtx());
     }
     const p = this.player.pos;
-    const treeDmg = this.trees.update(dt, rail, globalUniforms.uScroll.value, p.x, p.y, p.z, this.foliage, playing && this.player.vulnerable());
+    const treeDmg = this.props.update(dt, rail, globalUniforms.uScroll.value, p.x, p.y, p.z, this.foliage, playing && this.player.vulnerable());
     if (treeDmg > 0) {
       this.player.takeDamage(treeDmg);
       this.player.vel.x *= -0.6;
@@ -616,7 +725,11 @@ class Game {
     this.player.renderSprites(this.batch, time);
     this.renderWarpStreaks(dt);
     this.batch.end();
-    this.ctx.wyrmWriter.end();
+    sw.flockBody.end();
+    sw.wingL.end();
+    sw.wingR.end();
+    sw.leaper.end();
+    sw.segment.end();
 
     this.updateCamera(dt);
     this.updateEffects(dt);
@@ -632,7 +745,7 @@ class Game {
         this.director!.update(dt, this.sectorTime, this.spawner, true);
         if (this.sectorTime >= dur) {
           this.setState('bossIntro');
-          this.showBanner('WARNING', 'HOSTILE CAPITAL SIGNATURE', true);
+          this.showBanner('WARNING', 'APEX BEAST APPROACHING', true);
           this.sfx.alarm();
           this.music.setMode('boss');
         }
@@ -732,6 +845,10 @@ class Game {
     }
     this.input.setSecondaryButton(ready, o.equipped ? SECONDARIES[o.equipped].short : '');
     $('#dash-fill').style.transform = `scaleX(${1 - p.dashCooldownLeft / s.dashCooldown})`;
+    const whipReady = this.whip.readiness(s);
+    $('#whip-fill').style.transform = `scaleX(${whipReady})`;
+    $('#whip-row').classList.toggle('ready', whipReady >= 1);
+    this.input.setMeleeButton(whipReady);
     const hp = Math.ceil(p.hp);
     if (hp !== this.lastHud.hp) {
       this.lastHud.hp = hp;
@@ -844,8 +961,8 @@ class Game {
 
   private helpHtml(): string {
     return this.input.isTouch
-      ? `<div class="help">LEFT THUMB: MOVE · DOUBLE-TAP + PUSH: EVADE · FIRE: SHOOT · SMALL BUTTON: ORDNANCE · II: PAUSE</div>`
-      : `<div class="help">WASD / ARROWS: MOVE · SPACE / LMB: FIRE · E / RMB: ORDNANCE · SHIFT + DIRECTION: EVADE · ESC / P: PAUSE<br/>GAMEPAD: LEFT STICK · RT / A FIRE · RB / X ORDNANCE · LB EVADE · START PAUSE</div>`;
+      ? `<div class="help">LEFT THUMB: MOVE · DOUBLE-TAP + PUSH: EVADE · FIRE: SHOOT · WHIP: HARD-LIGHT LASH · SMALL BUTTON: ORDNANCE · II: PAUSE</div>`
+      : `<div class="help">WASD / ARROWS: MOVE · SPACE / LMB: FIRE · Q / F / MMB: WHIP · E / RMB: ORDNANCE · SHIFT + DIRECTION: EVADE · ESC / P: PAUSE<br/>GAMEPAD: LEFT STICK · RT / A FIRE · B / LT WHIP · RB / X ORDNANCE · LB EVADE · START PAUSE</div>`;
   }
 
   private applySettings(): void {
@@ -855,6 +972,7 @@ class Game {
 
   private showTitle(): void {
     this.setState('title');
+    this.applyBiome(BIOMES.ocean);
     this.applyPalette(PALETTES[0]);
     this.ctx.fx = resolveModifiers([]);
     this.music.setMode('title');
@@ -875,7 +993,7 @@ class Game {
       .join('');
     this.showScreen(`
       <h1 class="logo">NEBULA<br/><span>HARRIER</span></h1>
-      <div class="tag">SKYBOUND RAIL ASSAULT</div>
+      <div class="tag">JETPACK ISLAND ADVENTURE</div>
       <div class="cores">◆ ${prof.chronocores.toLocaleString('en-US')} CHRONOCORES · BEST ${prof.best_score.toLocaleString('en-US')}</div>
       <div class="cards" style="margin-top:14px">${archCards}</div>
       <div class="row">
@@ -889,7 +1007,7 @@ class Game {
   private showMap(): void {
     this.setState('map');
     this.menuReturn = null;
-    const nodes = generateNodeChoices(this.sector, this.runSeed);
+    const nodes = generateNodeChoices(this.sector, this.runSeed, this.visited);
     this.pendingNodes = nodes;
     const cards = nodes
       .map((n, i) => {
@@ -900,7 +1018,7 @@ class Game {
         const desc = n.modifiers.length ? n.modifiers.map((m) => ELITE_MODIFIERS[m].desc).join(' · ') : 'A quieter corridor. Standard threat profile.';
         return `<button class="card" data-action="node" data-arg="${i}">
           <div class="name">${sw}${n.title}</div>
-          <div class="desc">${n.palette.name}<br/>${desc}</div>
+          <div class="desc"><b>${n.biome.name}</b> · ${n.palette.name}<br/>${n.biome.blurb}<br/>${desc}</div>
           <div class="mods">${mods}</div>
           <div class="meta">REWARD ×${n.rewardMul.toFixed(2)}</div>
         </button>`;
@@ -908,7 +1026,7 @@ class Game {
       .join('');
     this.showScreen(`
       <h3>SECTOR ${this.sector} / ${SECTOR_COUNT} · CHART COURSE</h3>
-      <div class="sub">HULL ${Math.ceil(this.player.hp)} / ${this.stats.maxHp} · SCORE ${this.score.toLocaleString('en-US')}</div>
+      <div class="sub">HEALTH ${Math.ceil(this.player.hp)} / ${this.stats.maxHp} · SCORE ${this.score.toLocaleString('en-US')}</div>
       <div class="cards">${cards}</div>`);
   }
 
@@ -942,7 +1060,7 @@ class Game {
       .join('');
     this.showScreen(`
       <h3>BOON DRAFT</h3>
-      <div class="sub">SELECT ONE AUGMENT · HULL REPAIRED 25%</div>
+      <div class="sub">SELECT ONE AUGMENT · HEALTH RESTORED 25%</div>
       <div class="cards">${cards}</div>`);
   }
 
@@ -950,13 +1068,15 @@ class Game {
     this.input.flush();
     this.setState('warp');
     this.sfx.warp();
-    this.showBanner('WARP', `ENGAGING SECTOR ${this.sector + 1}`);
+    if (this.sector === 1) this.showBanner('LANDFALL', 'ONWARD TO THE ISLAND');
+    else if (this.sector + 1 === SECTOR_COUNT) this.showBanner('ASCENT', 'INTO THE CALDERA');
+    else this.showBanner('ONWARD', `HEADING INLAND · SECTOR ${this.sector + 1}`);
   }
 
   private showRunSummary(victory: boolean, cores: number, best: boolean): void {
     this.menuReturn = () => this.showTitle();
     this.showScreen(`
-      <h3>${victory ? 'NEBULA LIBERATED' : 'HARRIER LOST'}</h3>
+      <h3>${victory ? 'ISLAND LIBERATED' : 'HARRIER DOWN'}</h3>
       <div class="sub">${victory ? 'ALL FIVE SECTORS CLEARED' : `FELL IN SECTOR ${this.sector}`}${best ? ' · NEW BEST' : ''}</div>
       <div class="tally">
         SCORE <b>${this.score.toLocaleString('en-US')}</b><br/>

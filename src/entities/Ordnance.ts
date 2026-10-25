@@ -166,7 +166,7 @@ export class Ordnance {
   /** Rolls for a weapon pod where an enemy died. */
   maybeDrop(x: number, y: number, z: number, kind: string): void {
     if (kind === 'boss' || this.pods.length > 0) return;
-    const big = kind === 'titan' || kind === 'sentinel';
+    const big = kind === 'mammoth' || kind === 'stalk' || kind === 'serpent';
     const chance = big ? 0.4 : this.equipped ? 0.04 : 0.12;
     if (Math.random() >= chance) return;
     const pool = IDS.filter((id) => id !== this.equipped);

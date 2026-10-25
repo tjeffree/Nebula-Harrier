@@ -21,7 +21,9 @@ export function difficulty(t: number, sector: number, omegaSum: number): number 
   return Math.pow(sector, 1.4) * (1 + t / 60) + omegaSum;
 }
 
-export const ENEMY_COST = { wyrm: 1, sentinel: 3, titan: 8 } as const;
+/** Director points each beast costs. */
+export const ENEMY_COST = { flock: 1, leaper: 1, stalk: 3, serpent: 5, mammoth: 8 } as const;
+export type BeastKind = keyof typeof ENEMY_COST;
 
 // ---------------------------------------------------------------------------
 // Elite modifiers (Ω) and sector nodes
@@ -36,11 +38,11 @@ export interface EliteModifier {
 }
 
 export const ELITE_MODIFIERS: Record<ModifierId, EliteModifier> = {
-  ARMORED: { id: 'ARMORED', name: 'Armored', omega: 1.5, desc: 'Enemy hull ×1.5' },
-  VOLATILE: { id: 'VOLATILE', name: 'Volatile', omega: 2.0, desc: 'Kills burst into shrapnel' },
-  OVERCLOCKED: { id: 'OVERCLOCKED', name: 'Overclocked', omega: 1.2, desc: 'Hostile fire +30% speed, +20% rate' },
-  SWARMING: { id: 'SWARMING', name: 'Swarming', omega: 1.0, desc: 'Wyrm packs +2' },
-  SHROUDED: { id: 'SHROUDED', name: 'Shrouded', omega: 0.8, desc: 'Visibility reduced' },
+  ARMORED: { id: 'ARMORED', name: 'Thick-Hided', omega: 1.5, desc: 'Beast health ×1.5' },
+  VOLATILE: { id: 'VOLATILE', name: 'Venomous', omega: 2.0, desc: 'Slain beasts burst into venom spines' },
+  OVERCLOCKED: { id: 'OVERCLOCKED', name: 'Frenzied', omega: 1.2, desc: 'Hostile fire +30% speed, +20% rate' },
+  SWARMING: { id: 'SWARMING', name: 'Swarming', omega: 1.0, desc: 'Flocks +2' },
+  SHROUDED: { id: 'SHROUDED', name: 'Fogbound', omega: 0.8, desc: 'Visibility reduced' },
 };
 
 export interface ModifierEffects {
@@ -69,9 +71,9 @@ export function resolveModifiers(mods: readonly ModifierId[]): ModifierEffects {
 
 export interface SectorPalette {
   name: string;
-  /** Primary accent: swarm enemy panels, boss core, node swatch. */
+  /** Node swatch colour. */
   a: number;
-  /** Secondary accent: boss trim and pods. */
+  /** Secondary accent. */
   b: number;
   /** Sky zenith. */
   skyTop: number;
@@ -79,12 +81,6 @@ export interface SectorPalette {
   horizon: number;
   /** Horizon haze, used for fog. */
   haze: number;
-  /** Sand on the flats. */
-  groundA: number;
-  /** Exposed rock on slopes and spires. */
-  groundB: number;
-  /** Boulder tints at the foot of each spire. */
-  foliage: number[];
   sun: number;
   /** Direction toward the sun disc in the sky; the light sits a little higher. */
   sunDir: [number, number, number];
@@ -108,7 +104,7 @@ export interface SectorPalette {
   grade: GradeSettings;
 }
 
-/** Five times of day and weather: the sector look comes from light, not paint. */
+/** Five times of day and weather: lighting is independent of the biome underneath. */
 export const PALETTES: SectorPalette[] = [
   {
     name: 'Golden Hour',
@@ -117,9 +113,6 @@ export const PALETTES: SectorPalette[] = [
     skyTop: 0x47689a,
     horizon: 0xf0b483,
     haze: 0xe2b38a,
-    groundA: 0x8a7148,
-    groundB: 0xa7835a,
-    foliage: [0x8d6a52, 0x7a5c46, 0x9c7a5c],
     sun: 0xffd6a0,
     sunDir: [0.42, 0.075, -1],
     sunSize: 0.0009,
@@ -147,9 +140,6 @@ export const PALETTES: SectorPalette[] = [
     skyTop: 0x3b78c0,
     horizon: 0xc9d6de,
     haze: 0xd6d6cc,
-    groundA: 0xb39a72,
-    groundB: 0x9c7c5e,
-    foliage: [0x8a7458, 0xa08a6a, 0x766450],
     sun: 0xfff3e0,
     sunDir: [-0.3, 0.55, -1],
     sunSize: 0.0007,
@@ -177,9 +167,6 @@ export const PALETTES: SectorPalette[] = [
     skyTop: 0x353e4c,
     horizon: 0x7c838c,
     haze: 0x868c90,
-    groundA: 0x5f5a52,
-    groundB: 0x6f665c,
-    foliage: [0x4c4842, 0x5a544c, 0x3f3c38],
     sun: 0xcfd8e4,
     sunDir: [0.1, 0.35, -1],
     sunSize: 0,
@@ -207,9 +194,6 @@ export const PALETTES: SectorPalette[] = [
     skyTop: 0x2a2f55,
     horizon: 0xe0704a,
     haze: 0xc46a52,
-    groundA: 0x6b4a3c,
-    groundB: 0x8a5a44,
-    foliage: [0x5c3e32, 0x6e4a3a, 0x4a3328],
     sun: 0xff9a5a,
     sunDir: [-0.38, 0.045, -1],
     sunSize: 0.0012,
@@ -237,9 +221,6 @@ export const PALETTES: SectorPalette[] = [
     skyTop: 0x0f1830,
     horizon: 0x4a5a7c,
     haze: 0x3e4a66,
-    groundA: 0x464852,
-    groundB: 0x56545e,
-    foliage: [0x3a3c46, 0x44424c, 0x30323a],
     sun: 0xbcd4ff,
     sunDir: [0.3, 0.22, -1],
     sunSize: 0.0006,
@@ -262,9 +243,173 @@ export const PALETTES: SectorPalette[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Biomes: what the ground, scenery and wildlife look like. The run starts
+// over open sea, makes landfall on the main island, then pushes inland
+// through a branching choice of island biomes to the volcanic caldera.
+// ---------------------------------------------------------------------------
+export type BiomeId = 'ocean' | 'jungle' | 'mushroom' | 'ruins' | 'canyon' | 'caldera';
+export type PropKind = 'spire' | 'stack' | 'palm' | 'shroom' | 'column' | 'moai' | 'basalt';
+export type BossKind = 'leviathan' | 'wyvern' | 'crawler' | 'stonehead' | 'serpent' | 'firedrake';
+
+export interface Biome {
+  id: BiomeId;
+  name: string;
+  blurb: string;
+  /** Flats (sand, grass, moss, flagstone, ash). */
+  groundA: number;
+  /** Exposed rock on slopes and rock-type props. */
+  groundB: number;
+  /** Per-instance tints for prop details (canopies, caps, moss). */
+  foliage: number[];
+  water: number;
+  wall: number;
+  checker: number;
+  lava: number;
+  /** Horizon ridgeline height. */
+  ridge: number;
+  /** Relative spawn weights of the scenery. */
+  props: Partial<Record<PropKind, number>>;
+  /** Share of scenery placed in the flight lane as obstacles. */
+  laneProps: number;
+  /** Relative spawn weights of the wildlife. */
+  roster: Partial<Record<BeastKind, number>>;
+  /** Hide and markings of the wildlife. */
+  hide: number;
+  marking: number;
+  boss: { kind: BossKind; name: string };
+  titles: string[];
+}
+
+export const BIOMES: Record<BiomeId, Biome> = {
+  ocean: {
+    id: 'ocean',
+    name: 'Open Sea',
+    blurb: 'Sea stacks and skerries on the approach to the island.',
+    groundA: 0xc9b48a,
+    groundB: 0x6e6660,
+    foliage: [0x5c7a3a, 0x6f8a44, 0x4a6a34],
+    water: 1,
+    wall: 0,
+    checker: 0,
+    lava: 0,
+    ridge: 0.3,
+    props: { stack: 1 },
+    laneProps: 0.3,
+    roster: { flock: 1, leaper: 1.1, stalk: 0.7, serpent: 0.55 },
+    hide: 0x3c5a66,
+    marking: 0xe8d6a0,
+    boss: { kind: 'leviathan', name: 'THE TIDEMAW LEVIATHAN' },
+    titles: ['Shattered Sea', 'Gull Reach', 'Spindle Shoals', 'Brine Gate', 'Skerry Run'],
+  },
+  jungle: {
+    id: 'jungle',
+    name: 'Verdant Shore',
+    blurb: 'Palm groves along the island coast.',
+    groundA: 0x6a8a3c,
+    groundB: 0x8a7458,
+    foliage: [0x3f7a2a, 0x5a8f30, 0x2f6a2c],
+    water: 0,
+    wall: 0.45,
+    checker: 0,
+    lava: 0,
+    ridge: 0.8,
+    props: { palm: 1, spire: 0.15 },
+    laneProps: 0.22,
+    roster: { flock: 1, stalk: 0.8, serpent: 0.6, mammoth: 0.4 },
+    hide: 0x4a5a2a,
+    marking: 0xd8b03a,
+    boss: { kind: 'wyvern', name: 'GREENSCALE WYVERN' },
+    titles: ['Verdant Shore', 'Palm Run', 'Fernway', 'Coral Strand'],
+  },
+  mushroom: {
+    id: 'mushroom',
+    name: 'Sporewood',
+    blurb: 'A forest of towering mushrooms.',
+    groundA: 0x7a6a8a,
+    groundB: 0x6a5a6a,
+    foliage: [0xd8463a, 0xe08a3a, 0xb04a8a, 0x8a5ad8],
+    water: 0,
+    wall: 0.35,
+    checker: 0,
+    lava: 0,
+    ridge: 0.7,
+    props: { shroom: 1 },
+    laneProps: 0.25,
+    roster: { flock: 1.2, stalk: 1, serpent: 0.5, mammoth: 0.35 },
+    hide: 0x5a3a5a,
+    marking: 0x7ad8c0,
+    boss: { kind: 'crawler', name: 'THE MYCELIUM CRAWLER' },
+    titles: ['Sporewood', 'Cap Hollow', 'Mycel Vale', 'Puffball Glen'],
+  },
+  ruins: {
+    id: 'ruins',
+    name: 'Colonnade',
+    blurb: 'Columns and stone heads on an ancient paved plain.',
+    groundA: 0xb8a888,
+    groundB: 0x9a8a72,
+    foliage: [0x8a2f24, 0x9a3a2a, 0x7a2a20],
+    water: 0,
+    wall: 0.3,
+    checker: 1,
+    lava: 0,
+    ridge: 0.6,
+    props: { column: 1, moai: 0.35 },
+    laneProps: 0.25,
+    roster: { flock: 1, stalk: 0.7, serpent: 0.6, mammoth: 0.5 },
+    hide: 0x6a5a4a,
+    marking: 0x3ab0d8,
+    boss: { kind: 'stonehead', name: 'THE ELDER IDOL' },
+    titles: ['Colonnade', 'Hall of Heads', 'Idol Steppe', 'Marble Way'],
+  },
+  canyon: {
+    id: 'canyon',
+    name: 'Sunscorch Canyon',
+    blurb: 'Eroded spires in a deep red gorge.',
+    groundA: 0x8a7148,
+    groundB: 0xa7835a,
+    foliage: [0x8d6a52, 0x7a5c46, 0x9c7a5c],
+    water: 0,
+    wall: 1,
+    checker: 0,
+    lava: 0,
+    ridge: 1,
+    props: { spire: 1 },
+    laneProps: 0.22,
+    roster: { flock: 1, stalk: 0.8, serpent: 0.7, mammoth: 0.6 },
+    hide: 0x6a4a34,
+    marking: 0xe8742c,
+    boss: { kind: 'serpent', name: 'THE DUNE SERPENT' },
+    titles: ['Sunscorch Canyon', 'Red Gorge', 'Cinder Gate', 'Kestrel Run'],
+  },
+  caldera: {
+    id: 'caldera',
+    name: 'The Caldera',
+    blurb: 'Basalt and lava at the island’s burning heart.',
+    groundA: 0x3a3430,
+    groundB: 0x2e2a28,
+    foliage: [0x7a3a1a, 0x8a4a1a, 0x5a2a14],
+    water: 0,
+    wall: 1.15,
+    checker: 0,
+    lava: 1,
+    ridge: 1.3,
+    props: { basalt: 1, spire: 0.3 },
+    laneProps: 0.25,
+    roster: { flock: 1, stalk: 0.9, serpent: 0.8, mammoth: 0.7 },
+    hide: 0x2a2220,
+    marking: 0xff7a2a,
+    boss: { kind: 'firedrake', name: 'THE ASHEN FIREDRAKE' },
+    titles: ['The Caldera', 'Ember Throne', 'Obsidian Lace', 'Hollow Sun'],
+  },
+};
+
+const INLAND: BiomeId[] = ['jungle', 'mushroom', 'ruins', 'canyon'];
+
 export interface SectorNode {
   id: string;
   title: string;
+  biome: Biome;
   palette: SectorPalette;
   modifiers: ModifierId[];
   omega: number;
@@ -272,15 +417,30 @@ export interface SectorNode {
   seed: number;
 }
 
-const NODE_NAMES = [
-  'Cinder Gate', 'Halcyon Drift', 'Shardfall', 'Vesper Line', 'Nadir Coil', 'Prism Wake', 'Iris Fold',
-  'Kestrel Run', 'Obsidian Lace', 'Corona Shelf', 'Lumen Trench', 'Auric Veil', 'Static Reef', 'Hollow Sun',
-];
-
-/** Three branch choices for the next sector, seeded per run. */
-export function generateNodeChoices(sector: number, runSeed: number): SectorNode[] {
+/**
+ * Three branch choices for the next sector, seeded per run. Sector 1 is
+ * always the sea crossing and the last sector the caldera; in between each
+ * branch leads into a different inland biome, favouring unvisited ones.
+ */
+export function generateNodeChoices(sector: number, runSeed: number, visited: readonly BiomeId[] = []): SectorNode[] {
   const rng = mulberry32(runSeed * 977 + sector * 7919);
   const ids = Object.keys(ELITE_MODIFIERS) as ModifierId[];
+  let biomes: BiomeId[];
+  if (sector === 1) biomes = ['ocean', 'ocean', 'ocean'];
+  else if (sector >= SECTOR_COUNT) biomes = ['caldera', 'caldera', 'caldera'];
+  else {
+    const shuffle = (a: BiomeId[]) => {
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+    // Unvisited biomes first; revisits only fill the remaining branches.
+    const fresh = shuffle(INLAND.filter((b) => !visited.includes(b)));
+    const seen = shuffle(INLAND.filter((b) => visited.includes(b)));
+    biomes = shuffle([...fresh, ...seen].slice(0, 3));
+  }
   const nodes: SectorNode[] = [];
   const usedNames = new Set<string>();
   for (let i = 0; i < 3; i++) {
@@ -290,12 +450,14 @@ export function generateNodeChoices(sector: number, runSeed: number): SectorNode
     const pool = [...ids];
     for (let k = 0; k < count; k++) mods.push(pool.splice(Math.floor(rng() * pool.length), 1)[0]);
     const omega = mods.reduce((s, m) => s + ELITE_MODIFIERS[m].omega, 0);
-    let name = NODE_NAMES[Math.floor(rng() * NODE_NAMES.length)];
-    while (usedNames.has(name)) name = NODE_NAMES[Math.floor(rng() * NODE_NAMES.length)];
+    const biome = BIOMES[biomes[i]];
+    let name = biome.titles[Math.floor(rng() * biome.titles.length)];
+    for (let guard = 0; usedNames.has(name) && guard < 20; guard++) name = biome.titles[Math.floor(rng() * biome.titles.length)];
     usedNames.add(name);
     nodes.push({
       id: `${sector}-${i}`,
       title: name,
+      biome,
       palette: PALETTES[(sector - 1 + i * 2) % PALETTES.length],
       modifiers: mods,
       omega,
@@ -307,13 +469,15 @@ export function generateNodeChoices(sector: number, runSeed: number): SectorNode
 }
 
 // ---------------------------------------------------------------------------
-// Wave director: spends difficulty points on enemy spawns every cycle.
+// Wave director: spends difficulty points on wildlife every cycle.
 // ---------------------------------------------------------------------------
 export interface Spawner {
-  spawnWyrmGroup(count: number, rng: () => number): void;
-  spawnSentinel(rng: () => number): void;
-  spawnTitan(rng: () => number): void;
-  spawnSpire(x: number, scale: number): void;
+  spawnFlock(count: number, rng: () => number): void;
+  spawnLeapers(count: number, rng: () => number): void;
+  spawnStalk(rng: () => number): void;
+  spawnSerpent(rng: () => number): void;
+  spawnMammoth(rng: () => number): void;
+  spawnProp(x: number, scale: number, rng: () => number): void;
   /** Sum of the costs of all live enemies. */
   aliveCost(): number;
 }
@@ -321,7 +485,7 @@ export interface Spawner {
 export class WaveDirector {
   private budget = 0;
   private cycleTimer = 1.2;
-  private spireTimer = 1;
+  private propTimer = 1;
   private rng: () => number;
   /** Current D(t,S) — exposed for HUD/debug. */
   current = 0;
@@ -330,6 +494,7 @@ export class WaveDirector {
     private readonly sector: number,
     private readonly omega: number,
     private readonly effects: ModifierEffects,
+    private readonly biome: Biome,
     seed: number,
   ) {
     this.rng = mulberry32(seed);
@@ -341,13 +506,12 @@ export class WaveDirector {
     const D = difficulty(t, this.sector, this.omega);
     this.current = D;
 
-    this.spireTimer -= dt;
-    if (this.spireTimer <= 0) {
-      this.spireTimer = 0.5 + this.rng() * 1.1;
-      const lane = this.rng();
+    this.propTimer -= dt;
+    if (this.propTimer <= 0) {
+      this.propTimer = 0.28 + this.rng() * 0.6;
       // Mostly flanking scenery; occasionally an obstacle in the flight lane.
-      const x = lane < 0.22 ? (this.rng() - 0.5) * 16 : (this.rng() < 0.5 ? -1 : 1) * (11 + this.rng() * 16);
-      spawner.spawnSpire(x, 0.7 + this.rng() * 0.8);
+      const x = this.rng() < this.biome.laneProps ? (this.rng() - 0.5) * 16 : (this.rng() < 0.5 ? -1 : 1) * (11 + this.rng() * 16);
+      spawner.spawnProp(x, 0.7 + this.rng() * 0.8, this.rng);
     }
 
     if (!spawning) return;
@@ -360,20 +524,45 @@ export class WaveDirector {
     const cap = 4 + D * 2.4;
     let guard = 6;
     while (guard-- > 0 && this.budget >= 1 && spawner.aliveCost() < cap) {
-      const r = this.rng();
-      if (this.budget >= ENEMY_COST.titan && (this.sector >= 2 || t > 45) && r < 0.3) {
-        spawner.spawnTitan(this.rng);
-        this.budget -= ENEMY_COST.titan;
-      } else if (this.budget >= ENEMY_COST.sentinel && r < 0.55) {
-        spawner.spawnSentinel(this.rng);
-        this.budget -= ENEMY_COST.sentinel;
-      } else {
-        const n = Math.max(1, Math.min(Math.floor(this.budget), 3 + Math.floor(this.rng() * 3))) + this.effects.swarmBonus;
-        spawner.spawnWyrmGroup(n, this.rng);
-        this.budget -= n - this.effects.swarmBonus;
+      const kind = this.pick(t);
+      switch (kind) {
+        case 'mammoth':
+          spawner.spawnMammoth(this.rng);
+          break;
+        case 'serpent':
+          spawner.spawnSerpent(this.rng);
+          break;
+        case 'stalk':
+          spawner.spawnStalk(this.rng);
+          break;
+        case 'leaper':
+        case 'flock': {
+          const n = Math.max(1, Math.min(Math.floor(this.budget), 3 + Math.floor(this.rng() * 3)));
+          if (kind === 'leaper') spawner.spawnLeapers(n + Math.floor(this.effects.swarmBonus / 2), this.rng);
+          else spawner.spawnFlock(n + this.effects.swarmBonus, this.rng);
+          this.budget -= n;
+          continue;
+        }
       }
+      this.budget -= ENEMY_COST[kind];
     }
   }
-}
 
-export const BOSS_NAMES = ['SERAPH PRISMARCH', 'EMBER LEVIATHAN', 'VIRIDIAN COLOSSUS', 'UMBRAL HIEROPHANT', 'THE SOLAR HARBINGER'];
+  /** Weighted pick among the biome's wildlife that the budget can afford. */
+  private pick(t: number): BeastKind {
+    const big = this.sector >= 2 || t > 45;
+    const opts: [BeastKind, number][] = [];
+    for (const [k, w] of Object.entries(this.biome.roster) as [BeastKind, number][]) {
+      if (ENEMY_COST[k] > this.budget) continue;
+      if ((k === 'mammoth' || k === 'serpent') && !big && !(k === 'serpent' && t > 20)) continue;
+      opts.push([k, w]);
+    }
+    if (opts.length === 0) return 'flock';
+    let r = this.rng() * opts.reduce((s, o) => s + o[1], 0);
+    for (const [k, w] of opts) {
+      r -= w;
+      if (r <= 0) return k;
+    }
+    return opts[opts.length - 1][0];
+  }
+}

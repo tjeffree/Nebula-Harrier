@@ -19,6 +19,17 @@ export interface RunStats {
   scoreMul: number;
   maxHp: number;
   shieldInterval: number;
+  /** Hard-light whip: damage per enemy per swing, cooldown, reach and half-arc (radians). */
+  whipDamage: number;
+  whipCooldown: number;
+  whipReach: number;
+  whipArc: number;
+  /** 1 = the whip slices hostile fire out of the air. */
+  whipCutsBullets: number;
+  /** 1 = whip strikes arc lightning to nearby beasts. */
+  whipChain: number;
+  /** 1 = evading readies the whip at once. */
+  dashReadiesWhip: number;
 }
 
 export type ArchetypeId = 'STRIKER' | 'TEMPEST' | 'PHANTOM';
@@ -39,7 +50,7 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
   STRIKER: {
     id: 'STRIKER',
     name: 'Striker',
-    blurb: 'Heavy single lance. High damage per bolt, steady cadence.',
+    blurb: 'Heavy-bore blaster. High damage per bolt, steady cadence.',
     unlockCost: 0,
     accent: 0xe8742c,
     trim: 0xffb35a,
@@ -59,7 +70,7 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
   PHANTOM: {
     id: 'PHANTOM',
     name: 'Phantom',
-    blurb: 'Phase-shift frame. Short dash cooldown, long invulnerability.',
+    blurb: 'Featherweight rocket pack. Short dash cooldown, long invulnerability.',
     unlockCost: 900,
     accent: 0x4a8fc9,
     trim: 0x9fd8ff,
@@ -72,6 +83,7 @@ export interface MetaBonuses {
   hullTier: number;
   ordnanceTier: number;
   fluxTier: number;
+  whipTier: number;
 }
 
 export type BoonId =
@@ -82,7 +94,11 @@ export type BoonId =
   | 'fractal_rounds'
   | 'ordnance_link'
   | 'nanite_weave'
-  | 'aegis_lattice';
+  | 'aegis_lattice'
+  | 'searing_lash'
+  | 'long_lash'
+  | 'quick_lash'
+  | 'mirror_lash';
 
 export interface BoonDef {
   id: BoonId;
@@ -171,7 +187,7 @@ export const BOONS: Record<BoonId, BoonDef> = {
     name: 'Nanite Weave',
     glyph: '✚',
     maxStacks: 3,
-    desc: () => 'Max hull +25. Immediately repairs 40% of hull.',
+    desc: () => 'Max health +25. Immediately restores 40% of health.',
     apply: (s, n) => {
       s.maxHp += 25 * n;
     },
@@ -184,6 +200,47 @@ export const BOONS: Record<BoonId, BoonDef> = {
     desc: (n) => (n === 1 ? 'A shield absorbs one hit; recharges every 9s.' : 'Shield recharge 5s.'),
     apply: (s, n) => {
       s.shieldInterval = n === 1 ? 9 : 5;
+    },
+  },
+  searing_lash: {
+    id: 'searing_lash',
+    name: 'Searing Lash',
+    glyph: '∿',
+    maxStacks: 2,
+    desc: () => 'Hard-light whip damage +45%.',
+    apply: (s, n) => {
+      s.whipDamage *= Math.pow(1.45, n);
+    },
+  },
+  long_lash: {
+    id: 'long_lash',
+    name: 'Long Lash',
+    glyph: '⟿',
+    maxStacks: 2,
+    desc: () => 'Whip reach +20% and a wider sweep.',
+    apply: (s, n) => {
+      s.whipReach *= Math.pow(1.2, n);
+      s.whipArc *= Math.pow(1.15, n);
+    },
+  },
+  quick_lash: {
+    id: 'quick_lash',
+    name: 'Quickdraw',
+    glyph: '↯',
+    maxStacks: 2,
+    desc: () => 'Whip cooldown −30%.',
+    apply: (s, n) => {
+      s.whipCooldown *= Math.pow(0.7, n);
+    },
+  },
+  mirror_lash: {
+    id: 'mirror_lash',
+    name: 'Mirror Lash',
+    glyph: '◐',
+    maxStacks: 1,
+    desc: () => 'The whip slices hostile fire out of the air.',
+    apply: (s) => {
+      s.whipCutsBullets = 1;
     },
   },
 };
@@ -223,6 +280,24 @@ export const SYNERGIES: SynergyDef[] = [
     desc: 'Secondary weapon damage ×1.6.',
     apply: (s) => {
       s.secondaryDmgMul *= 1.6;
+    },
+  },
+  {
+    id: 'riposte',
+    name: 'Riposte',
+    requires: ['temporal_dash', 'quick_lash'],
+    desc: 'Evading instantly readies the whip.',
+    apply: (s) => {
+      s.dashReadiesWhip = 1;
+    },
+  },
+  {
+    id: 'thunder_lash',
+    name: 'Thunder Lash',
+    requires: ['overcharge_coil', 'searing_lash'],
+    desc: 'Whip strikes arc lightning to nearby beasts.',
+    apply: (s) => {
+      s.whipChain = 1;
     },
   },
 ];
@@ -297,11 +372,20 @@ export class BoonRegistry {
       scoreMul: 1,
       maxHp: 100,
       shieldInterval: 0,
+      whipDamage: 12,
+      whipCooldown: 1.0,
+      whipReach: 44,
+      whipArc: 0.95,
+      whipCutsBullets: 0,
+      whipChain: 0,
+      dashReadiesWhip: 0,
     };
     // Meta-tree permanent upgrades.
     s.maxHp += 20 * meta.hullTier;
     s.secondaryCdMul *= 1 - 0.1 * meta.ordnanceTier;
     s.damage *= 1 + 0.2 * meta.fluxTier;
+    s.whipDamage *= 1 + 0.25 * meta.whipTier;
+    s.whipReach *= 1 + 0.08 * meta.whipTier;
     // Boons, then synergies.
     for (const [id, n] of this.owned) BOONS[id].apply(s, n);
     for (const syn of this.activeSynergies()) syn.apply(s);

@@ -24,6 +24,7 @@ export class InputManager {
   private padFire = false;
   private dashQueued: { x: number; y: number } | null = null;
   private secondaryQueued = false;
+  private meleeQueued = false;
   private pauseQueued = false;
   private navQueue: NavAction[] = [];
   private lastDir = { x: 1, y: 0 };
@@ -41,6 +42,8 @@ export class InputManager {
   private altBtn!: HTMLDivElement;
   private altLabel!: HTMLSpanElement;
   private altState = { fill: -1, label: '' };
+  private whipBtn!: HTMLDivElement;
+  private whipFill = -1;
   private touchLayer!: HTMLDivElement;
 
   // Gamepad edge detection.
@@ -58,6 +61,10 @@ export class InputManager {
     surface.addEventListener('mousedown', (e) => {
       if (e.button === 0) this.mouseFire = true;
       if (e.button === 2) this.secondaryQueued = true;
+      if (e.button === 1) {
+        e.preventDefault();
+        this.meleeQueued = true;
+      }
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseFire = false;
@@ -72,6 +79,7 @@ export class InputManager {
       if (!this.keys.has(code)) {
         if (code === 'ShiftLeft' || code === 'ShiftRight') this.queueDashFromMove();
         if (code === 'KeyE' || code === 'KeyX') this.secondaryQueued = true;
+        if (code === 'KeyQ' || code === 'KeyF' || code === 'KeyC') this.meleeQueued = true;
         if (code === 'Escape' || code === 'KeyP') this.pauseQueued = true;
         if (this.menuMode) {
           const nav: Record<string, NavAction> = {
@@ -124,7 +132,8 @@ export class InputManager {
       <div class="stick-zone"></div>
       <div class="stick-base"><div class="stick-knob"></div></div>
       <div class="fire-btn"><span>FIRE</span></div>
-      <div class="alt-btn empty"><span></span></div>`;
+      <div class="alt-btn empty"><span></span></div>
+      <div class="alt-btn whip-btn ready"><span>WHIP</span></div>`;
     this.surface.parentElement!.appendChild(layer);
     this.touchLayer = layer;
     this.stickBase = layer.querySelector('.stick-base') as HTMLDivElement;
@@ -162,7 +171,16 @@ export class InputManager {
     this.fireBtn.addEventListener('touchend', endFire, opts);
     this.fireBtn.addEventListener('touchcancel', endFire, opts);
 
-    this.altBtn = layer.querySelector('.alt-btn') as HTMLDivElement;
+    this.whipBtn = layer.querySelector('.whip-btn') as HTMLDivElement;
+    this.whipBtn.addEventListener(
+      'touchstart',
+      (e) => {
+        e.preventDefault();
+        this.meleeQueued = true;
+      },
+      opts,
+    );
+    this.altBtn = layer.querySelector('.alt-btn:not(.whip-btn)') as HTMLDivElement;
     this.altLabel = this.altBtn.querySelector('span') as HTMLSpanElement;
     this.altBtn.addEventListener(
       'touchstart',
@@ -188,6 +206,15 @@ export class InputManager {
     this.altBtn.classList.toggle('empty', !label);
     this.altBtn.classList.toggle('ready', !!label && f >= 1);
     this.altLabel.textContent = label;
+  }
+
+  /** Whip button: `fill` 0..1 sweeps round as the whip recharges. */
+  setMeleeButton(fill: number): void {
+    const f = Math.round(fill * 50) / 50;
+    if (f === this.whipFill) return;
+    this.whipFill = f;
+    this.whipBtn.style.setProperty('--fill', String(f));
+    this.whipBtn.classList.toggle('ready', f >= 1);
   }
 
   private onStickStart(e: TouchEvent): void {
@@ -282,6 +309,7 @@ export class InputManager {
       if (b(15)) mx += 1;
       padFire = b(7) || b(0) || (pad.buttons[7]?.value ?? 0) > 0.3;
       if (edge(5) || edge(2)) this.secondaryQueued = true;
+      if (!this.menuMode && (edge(1) || edge(6) || edge(3))) this.meleeQueued = true;
       if (edge(4)) {
         const len = Math.hypot(mx, my);
         this.dashQueued = len > 0.2 ? { x: mx / len, y: my / len } : { ...this.lastDir };
@@ -329,6 +357,12 @@ export class InputManager {
     return s;
   }
 
+  consumeMelee(): boolean {
+    const m = this.meleeQueued;
+    this.meleeQueued = false;
+    return m;
+  }
+
   consumePause(): boolean {
     const p = this.pauseQueued;
     this.pauseQueued = false;
@@ -347,6 +381,7 @@ export class InputManager {
   flush(): void {
     this.dashQueued = null;
     this.secondaryQueued = false;
+    this.meleeQueued = false;
     this.pauseQueued = false;
     this.navQueue.length = 0;
     this.mouseFire = false;

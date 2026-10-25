@@ -156,14 +156,17 @@ cell(12, (u, v) => {
   return [core, 0.55 + 0.45 * Math.max(rim, core), 0, Math.max(body, halo)];
 });
 
-// 13: WYRM_LOD – distant armoured segment chain: dark hull, accent stripe, sensor glint.
+// 13: FLOCK_LOD – a distant razorwing: dark body, swept bat wings, glinting eyes.
 cell(13, (u, v) => {
-  const hull = smooth(1, 0.9, Math.hypot(u / 0.6, (v - 0.05) / 0.32));
-  const wing = smooth(1, 0.85, Math.hypot(u / 0.92, (v - 0.12) / 0.09));
-  const stripe = gauss(v + 0.02, 0.05) * smooth(0.5, 0.3, Math.abs(u));
-  const eye = smooth(0.12, 0.04, Math.hypot(u, v + 0.12));
-  const a = Math.max(hull, wing);
-  return [eye, clamp(0.28 + stripe * 0.72 + eye), 0, a];
+  const body = smooth(1, 0.85, Math.hypot(u / 0.16, (v - 0.02) / 0.34));
+  const au = Math.abs(u);
+  // Wing: leading edge rises toward the tip; trailing edge scalloped between fingers.
+  const lead = -0.05 - au * 0.35;
+  const trail = 0.12 + 0.12 * Math.abs(Math.sin(au * 9)) - au * 0.18;
+  const wing = smooth(0.02, -0.02, lead - v) * smooth(0.02, -0.02, v - trail) * smooth(0.95, 0.85, au);
+  const eye = smooth(0.06, 0.02, Math.hypot(au - 0.05, v + 0.22));
+  const a = Math.max(body, wing);
+  return [eye, clamp(0.3 + wing * 0.25 + eye), 0, a];
 });
 
 // 14: RING – shockwave.

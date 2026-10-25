@@ -335,6 +335,71 @@ export class SoundSynth {
     }
   }
 
+  /** Hard-light whip crack: a noise swish sweeping up into a bright zap. */
+  whip(): void {
+    if (!this.live || !this.gate('whip', 0.08)) return;
+    const t = this.now;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.white;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = 3;
+    f.frequency.setValueAtTime(600, t);
+    f.frequency.exponentialRampToValueAtTime(7000, t + 0.16);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.3, t + 0.1);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    src.connect(f).connect(g).connect(this.sfxBus);
+    src.start(t, Math.random());
+    src.stop(t + 0.25);
+    const o = this.ctx.createOscillator();
+    const og = this.ctx.createGain();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(300, t + 0.08);
+    o.frequency.exponentialRampToValueAtTime(2400, t + 0.16);
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.setValueAtTime(0.08, t + 0.08);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
+    o.connect(og).connect(this.sfxBus);
+    o.start(t);
+    o.stop(t + 0.27);
+  }
+
+  /** Beast roar: detuned low saws with a falling pitch through a growling filter. */
+  roar(size = 1): void {
+    if (!this.live || !this.gate('roar', 0.6)) return;
+    const t = this.now;
+    const dur = 0.7 + size * 0.5;
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.Q.value = 6;
+    lp.frequency.setValueAtTime(300, t);
+    lp.frequency.linearRampToValueAtTime(900, t + dur * 0.3);
+    lp.frequency.exponentialRampToValueAtTime(160, t + dur);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22 * Math.min(1.5, size), t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    for (const det of [1, 1.03, 0.51]) {
+      const o = this.ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime((95 / size) * det, t);
+      o.frequency.exponentialRampToValueAtTime((55 / size) * det, t + dur);
+      o.connect(lp);
+      o.start(t);
+      o.stop(t + dur);
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.pink;
+    const ng = this.ctx.createGain();
+    ng.gain.value = 0.6;
+    src.connect(ng).connect(lp);
+    src.start(t);
+    src.stop(t + dur);
+    lp.connect(g).connect(this.sfxBus);
+  }
+
   warp(): void {
     if (!this.live) return;
     const t = this.now;

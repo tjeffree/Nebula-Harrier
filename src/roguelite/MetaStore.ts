@@ -1,6 +1,6 @@
 import type { ArchetypeId } from './BoonRegistry';
 
-export type UpgradeId = 'hull_plating' | 'ordnance_bay' | 'core_flux';
+export type UpgradeId = 'hull_plating' | 'ordnance_bay' | 'core_flux' | 'whip_emitter';
 
 export interface UpgradeEntry {
   tier: number;
@@ -20,9 +20,10 @@ export interface MetaProfile {
 }
 
 export const UPGRADE_INFO: Record<UpgradeId, { name: string; desc: string }> = {
-  hull_plating: { name: 'Hull Plating', desc: '+20 max hull per tier' },
+  hull_plating: { name: 'Flight Armour', desc: '+20 max health per tier' },
   ordnance_bay: { name: 'Ordnance Bay', desc: 'Launch with a Nova Bomb · −10% secondary cooldown per tier' },
-  core_flux: { name: 'Core Flux', desc: '+20% projectile damage per tier' },
+  core_flux: { name: 'Core Flux', desc: '+20% blaster damage per tier' },
+  whip_emitter: { name: 'Hard-Light Emitter', desc: '+25% whip damage and +8% reach per tier' },
 };
 
 const KEY = 'nh.meta.v1';
@@ -36,6 +37,7 @@ function defaults(): MetaProfile {
       hull_plating: { tier: 0, max: 5, base_cost: 100, scalar: 1.7 },
       ordnance_bay: { tier: 0, max: 5, base_cost: 150, scalar: 2.0 },
       core_flux: { tier: 0, max: 3, base_cost: 500, scalar: 2.5 },
+      whip_emitter: { tier: 0, max: 4, base_cost: 200, scalar: 1.9 },
     },
     unlocked_archetypes: ['STRIKER'],
     selected_archetype: 'STRIKER',

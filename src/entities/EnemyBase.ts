@@ -1,8 +1,17 @@
 import * as THREE from 'three';
 import { bus } from '../core/EventBus';
 import type { SoundSynth } from '../audio/SoundSynth';
-import type { ModifierEffects } from '../procgen/SectorBuilder';
+import type { Biome, ModifierEffects } from '../procgen/SectorBuilder';
 import { segPointDist2, type Hittable, type ParticleSystem, type ProjectileSystem, type SpriteBatch } from './ProjectileSystem';
+
+/** Per-frame writers for the instanced swarm creatures. */
+export interface SwarmWriters {
+  flockBody: InstanceWriter;
+  wingL: InstanceWriter;
+  wingR: InstanceWriter;
+  leaper: InstanceWriter;
+  segment: InstanceWriter;
+}
 
 /** Everything an enemy may read or drive during its update. */
 export interface GameContext {
@@ -17,8 +26,10 @@ export interface GameContext {
   sfx: SoundSynth;
   fx: ModifierEffects;
   enemies: EnemyManager;
-  wyrmWriter: InstanceWriter;
-  /** Body colour for instanced swarm enemies (sector accent). */
+  swarm: SwarmWriters;
+  /** The biome being flown through: wildlife colours, sea or land. */
+  biome: Biome;
+  /** Marking colour of instanced swarm creatures (biome). */
   accentColor: THREE.Color;
 }
 
@@ -136,6 +147,13 @@ export class InstanceWriter {
     if (this.n >= this.mesh.instanceMatrix.count) return;
     this.m.compose(pos, quat, scale);
     this.mesh.setMatrixAt(this.n, this.m);
+    this.mesh.setColorAt(this.n, this.c.setRGB(r, g, b));
+    this.n++;
+  }
+
+  writeMatrix(m: THREE.Matrix4, r: number, g: number, b: number): void {
+    if (this.n >= this.mesh.instanceMatrix.count) return;
+    this.mesh.setMatrixAt(this.n, m);
     this.mesh.setColorAt(this.n, this.c.setRGB(r, g, b));
     this.n++;
   }
