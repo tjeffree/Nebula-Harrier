@@ -13,6 +13,10 @@ npm run preview   # serve dist/
 
 Debug query flags: `?fps` (FPS / pixel-ratio / draw-call meter), `?quick` (10s sectors), `?god`, `?sector=N`, `?debug` (exposes `window.__nh`).
 
+## Deploy
+
+Pushing to `master` runs `.github/workflows/deploy.yml`, which builds the game and publishes `dist/` to GitHub Pages at <https://tjeffree.github.io/Nebula-Harrier/>. To turn it on, open the repository's **Settings → Pages** and set **Source** to **GitHub Actions**. The Vite `base` is `./`, so the build works under any sub-path.
+
 ## Controls
 
 | Action | Keyboard / Mouse | Touch | Gamepad |
