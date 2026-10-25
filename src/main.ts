@@ -45,6 +45,15 @@ const START_SECTOR = Math.max(1, Math.min(SECTOR_COUNT, Number(params.get('secto
 const FORCE_BIOME = BIOMES[params.get('biome') as BiomeId] as Biome | undefined;
 const SKIP_TO_BOSS = params.has('boss');
 const BASE_RAIL_SPEED = 38;
+/** Seconds a combo survives without another kill. */
+const COMBO_WINDOW = 1.1;
+/** Smallest combo that banks bonus chronocores when it ends. */
+const COMBO_MIN = 3;
+
+/** Score multiplier for the nth kill of a combo. */
+const comboScoreMul = (n: number) => Math.min(2.5, 1 + 0.1 * (n - 1));
+/** Chronocores banked when a combo of n kills ends: grows quadratically, so wiping out a pack beats picking it off. */
+const comboCores = (n: number) => (n < COMBO_MIN ? 0 : Math.round((Math.min(n, 24) * (Math.min(n, 24) - 2)) / 4));
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -97,6 +106,13 @@ class Game {
   private kills = 0;
   private coresBonus = 0;
   private sectorsCleared = 0;
+  private combo = 0;
+  private comboT = 0;
+  private bestCombo = 0;
+  private comboCoresEarned = 0;
+  private readonly lastKill = new THREE.Vector3();
+  private readonly popupPos = new THREE.Vector3();
+  private popupIdx = 0;
   private mines: Mine[] = [];
   private shake = 0;
   private damageFlash = 0;
@@ -112,6 +128,8 @@ class Game {
   private readonly hud = $('#hud');
   private readonly banner = $('#banner');
   private readonly pauseBtn = $<HTMLButtonElement>('#pause-btn');
+  private readonly comboEl = $('#combo');
+  private readonly popups: HTMLElement[] = Array.from({ length: 32 }, () => $('#popups').appendChild(document.createElement('div')));
 
   constructor() {
     const container = $('#game');
@@ -219,7 +237,20 @@ class Game {
   private bindEvents(): void {
     bus.on('enemy:killed', (e) => {
       if (e.kind !== 'boss') this.kills++;
-      this.score += Math.round(e.points * this.stats.scoreMul);
+      this.combo++;
+      this.comboT = COMBO_WINDOW;
+      this.bestCombo = Math.max(this.bestCombo, this.combo);
+      const pts = Math.round(e.points * this.stats.scoreMul * comboScoreMul(this.combo));
+      this.score += pts;
+      this.popup(e.x, e.y, e.z, `+${pts.toLocaleString('en-US')}`, this.combo >= COMBO_MIN ? 'hot' : '');
+      this.lastKill.set(e.x, e.y, e.z);
+      if (this.combo >= 2) {
+        $('#combo-n').textContent = String(this.combo);
+        this.comboEl.classList.add('on');
+        this.comboEl.classList.remove('bump');
+        void this.comboEl.offsetWidth; // restart animation
+        this.comboEl.classList.add('bump');
+      }
       const big = e.kind === 'mammoth' ? 1.6 : e.kind === 'serpent' ? 1.3 : e.kind === 'stalk' ? 1.1 : 0.7;
       this.sfx.explosion(big);
       this.shake = Math.max(this.shake, big > 1.2 ? 0.5 : 0.15);
@@ -332,6 +363,9 @@ class Game {
     this.kills = 0;
     this.coresBonus = 0;
     this.sectorsCleared = 0;
+    this.combo = 0;
+    this.bestCombo = 0;
+    this.comboCoresEarned = 0;
     this.clearField();
     this.renderBoons();
     this.requestLandscape();
@@ -371,6 +405,8 @@ class Game {
   }
 
   private clearField(): void {
+    this.endCombo(false);
+    for (const el of this.popups) el.className = '';
     this.enemies.clear(this.ctx);
     this.projectiles.clearAll();
     this.particles.clear();
@@ -517,7 +553,7 @@ class Game {
 
   private endRun(victory: boolean): void {
     this.sfx.setEngine(0, 0, false);
-    const base = this.score / 200 + this.kills * 0.4 + this.coresBonus;
+    const base = this.score / 200 + this.kills * 0.4 + this.coresBonus + this.comboCoresEarned;
     const cores = Math.floor(base * (victory ? 1.25 : 1));
     const prof = this.meta.profile;
     const best = this.score > prof.best_score;
@@ -566,6 +602,37 @@ class Game {
       }
       if (near.length) this.sfx.chain();
     }
+  }
+
+  /** Closes the current combo, banking its chronocores. */
+  private endCombo(show: boolean): void {
+    const cores = comboCores(this.combo);
+    if (cores > 0) {
+      this.comboCoresEarned += cores;
+      if (show) {
+        const k = this.lastKill;
+        this.popup(k.x, k.y + 1.5, k.z, `${this.combo}× COMBO +${cores} ◆`, 'cores');
+        this.sfx.chain();
+      }
+    }
+    this.combo = 0;
+    this.comboT = 0;
+    this.comboEl.classList.remove('on');
+  }
+
+  /** Floats a line of text up from a world position. */
+  private popup(x: number, y: number, z: number, text: string, cls: string): void {
+    const p = this.popupPos.set(x, y, z).project(this.engine.camera);
+    if (p.z > 1 || Math.abs(p.x) > 1.1 || Math.abs(p.y) > 1.1) return;
+    const canvas = this.engine.renderer.domElement;
+    const el = this.popups[this.popupIdx];
+    this.popupIdx = (this.popupIdx + 1) % this.popups.length;
+    el.textContent = text;
+    el.style.left = `${((p.x + 1) / 2) * canvas.clientWidth}px`;
+    el.style.top = `${((1 - p.y) / 2) * canvas.clientHeight}px`;
+    el.className = cls;
+    void el.offsetWidth; // restart animation
+    el.classList.add('go');
   }
 
   /**
@@ -650,6 +717,10 @@ class Game {
     globalUniforms.uScroll.value += rail * dt;
 
     this.runStateLogic(dt);
+    if (this.combo > 0) {
+      this.comboT -= dt;
+      if (this.comboT <= 0) this.endCombo(true);
+    }
 
     this.batch.begin();
     const sw = this.ctx.swarm;
@@ -870,6 +941,7 @@ class Game {
       $('#hud-timer').textContent = this.state === 'sector' ? String(remaining) : 'BOSS';
       $('#hud-sector').textContent = `SECTOR ${this.sector} / ${SECTOR_COUNT}`;
     }
+    if (this.combo >= 2) $('#combo-fill').style.transform = `scaleX(${Math.max(0, this.comboT / COMBO_WINDOW)})`;
     if (this.boss) $('#boss-fill').style.transform = `scaleX(${this.boss.hpFrac})`;
   }
 
@@ -1081,6 +1153,8 @@ class Game {
       <div class="tally">
         SCORE <b>${this.score.toLocaleString('en-US')}</b><br/>
         KILLS <b>${this.kills}</b><br/>
+        ${this.bestCombo >= 2 ? `BEST COMBO <b>${this.bestCombo}×</b><br/>` : ''}
+        ${this.comboCoresEarned > 0 ? `COMBO CORES <b>+${this.comboCoresEarned}</b><br/>` : ''}
         SECTORS CLEARED <b>${this.sectorsCleared}</b><br/>
         ${victory ? 'VICTORY BONUS <b>×1.25</b><br/>' : ''}
         CHRONOCORES EARNED <b>+${cores}</b>

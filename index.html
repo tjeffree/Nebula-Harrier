@@ -63,6 +63,24 @@
       .score { font-weight: 600; font-size: 34px; line-height: 1; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
       .mult { font-weight: 600; font-size: 12px; letter-spacing: 0.2em; color: var(--ink-dim); }
       .mult b { color: var(--amber); font-size: 17px; letter-spacing: 0.02em; }
+      /* Combo: kills landed in quick succession; the bar drains until the chain breaks. */
+      .combo { justify-self: end; margin-top: 6px; display: grid; justify-items: end; gap: 3px; opacity: 0; transition: opacity 0.15s; }
+      .combo.on { opacity: 1; }
+      .combo .k { color: var(--amber); }
+      .combo .k b { display: inline-block; font-size: 24px; letter-spacing: 0.02em; color: var(--ink); margin-right: 6px; font-variant-numeric: tabular-nums; }
+      .combo.bump .k b { animation: bump 0.18s ease-out; }
+      .combo .bar { width: 96px; }
+      #combo-fill { background: var(--amber); box-shadow: 0 0 6px rgba(255, 179, 71, 0.8); }
+      @keyframes bump { 0% { transform: scale(1.45); } 100% { transform: none; } }
+
+      /* Floating kill popups, placed in screen space where the kill happened. */
+      #popups { position: absolute; inset: 0; pointer-events: none; overflow: hidden; font-family: var(--cond); text-shadow: var(--shade); }
+      #popups div { position: absolute; left: 0; top: 0; font-weight: 600; font-size: 15px; letter-spacing: 0.04em; color: var(--ink); white-space: nowrap; opacity: 0; }
+      #popups div.hot { color: var(--amber); font-size: 19px; }
+      #popups div.cores { color: var(--amber); font-size: 26px; letter-spacing: 0.12em; }
+      #popups div.go { animation: popup 0.9s cubic-bezier(.2, .7, .2, 1) forwards; }
+      #popups div.cores.go { animation-duration: 1.4s; }
+      @keyframes popup { 0% { opacity: 0; translate: -50% -30%; scale: 0.7; } 15% { opacity: 1; translate: -50% -80%; scale: 1.1; } 70% { opacity: 1; } 100% { opacity: 0; translate: -50% -220%; scale: 1; } }
       #boons { position: absolute; right: max(22px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); display: flex; gap: 8px; }
       #boons span { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid rgba(255, 248, 236, 0.6);
         font-family: var(--text); font-size: 16px; position: relative; color: var(--ink); background: rgba(16, 12, 9, 0.2); }
@@ -203,6 +221,7 @@
         <div class="score-read">
           <div class="score" id="hud-score">0</div>
           <div class="mult"><b id="hud-mult">×1.0</b> CHAIN</div>
+          <div class="combo" id="combo"><span class="k"><b id="combo-n">0</b>COMBO</span><div class="bar"><i id="combo-fill"></i></div></div>
         </div>
         <div id="boons"></div>
         <div id="boss">
@@ -211,6 +230,7 @@
           <div class="bar"><i id="boss-fill"></i></div>
         </div>
       </div>
+      <div id="popups"></div>
       <div id="banner"><h2></h2><p></p></div>
       <button id="pause-btn" aria-label="Pause">II</button>
       <div id="screens"></div>
