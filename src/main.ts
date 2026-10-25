@@ -156,6 +156,7 @@ class Game {
     this.applySettings();
     this.bindEvents();
     this.bindDom();
+    this.bindFullscreen();
     this.showTitle();
     if (AUTOSTART) {
       this.startRun();
@@ -294,12 +295,35 @@ class Game {
   }
 
   private requestLandscape(): void {
-    if (!this.input.isTouch) return;
+    if (!this.input.isTouch || document.fullscreenElement) return;
     const el = document.documentElement;
     const orient = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
-    el.requestFullscreen?.()
+    el.requestFullscreen?.({ navigationUI: 'hide' })
       .then(() => orient.lock?.('landscape'))
       .catch(() => {});
+  }
+
+  /**
+   * Touch devices go fullscreen as soon as they are in landscape. Browsers only
+   * allow it from a user gesture, so rotating tries straight away and, if
+   * refused, the next tap anywhere completes it. Tapping the portrait "rotate"
+   * overlay goes fullscreen and locks landscape in one step.
+   */
+  private bindFullscreen(): void {
+    if (!this.input.isTouch || !document.documentElement.requestFullscreen) return;
+    const landscape = window.matchMedia('(orientation: landscape)');
+    const onTap = () => {
+      window.removeEventListener('pointerup', onTap, true);
+      if (landscape.matches) this.requestLandscape();
+    };
+    const arm = () => {
+      if (!landscape.matches || document.fullscreenElement) return;
+      this.requestLandscape();
+      window.addEventListener('pointerup', onTap, true);
+    };
+    landscape.addEventListener('change', arm);
+    $('#rotate').addEventListener('click', () => this.requestLandscape());
+    arm();
   }
 
   private clearField(): void {

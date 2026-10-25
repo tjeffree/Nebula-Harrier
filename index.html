@@ -21,8 +21,8 @@
         --amber: #ffb347;
         --alert: #ff5a3d;
         --ok: #c4d98a;
-        --glass: rgba(16, 12, 9, 0.58);
-        --glass-hi: rgba(28, 21, 15, 0.72);
+        --glass: rgba(16, 12, 9, 0.7);
+        --glass-hi: rgba(28, 21, 15, 0.8);
         --hair: rgba(255, 248, 236, 0.2);
         --cond: 'Barlow Condensed', 'Arial Narrow', 'Roboto Condensed', sans-serif;
         --text: 'Barlow', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -113,7 +113,7 @@
       .cards { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
       .card { width: min(290px, 30vw); min-width: 190px; text-align: left; padding: 16px 18px; background: var(--glass); border: 1px solid var(--hair);
         border-radius: 0; color: var(--ink); cursor: pointer; font-family: var(--text); position: relative;
-        backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); transition: border-color 0.12s, background 0.12s, transform 0.15s; text-shadow: none; }
+        transition: border-color 0.12s, background 0.12s, transform 0.15s; text-shadow: none; }
       .card:hover, .card:focus { outline: none; border-color: var(--amber); background: var(--glass-hi); transform: translateY(-2px); }
       .card.sel { border-color: rgba(255, 179, 71, 0.7); box-shadow: inset 3px 0 0 var(--amber); }
       .card.locked { opacity: 0.6; }
@@ -127,7 +127,7 @@
       .chip.calm { color: var(--ok); border-color: rgba(196, 217, 138, 0.55); }
       .swatch { display: inline-block; width: 10px; height: 10px; vertical-align: 1px; margin-right: 8px; transform: rotate(45deg); }
       .shop { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); text-align: left; margin: 16px 0; }
-      .shop .item { background: var(--glass); border: 1px solid var(--hair); padding: 14px 16px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); text-shadow: none; }
+      .shop .item { background: var(--glass); border: 1px solid var(--hair); padding: 14px 16px; text-shadow: none; }
       .shop .item .name { font: 600 16px var(--cond); letter-spacing: 0.14em; text-transform: uppercase; }
       .shop .item .desc { font-size: 13px; color: var(--ink-dim); margin-top: 3px; }
       .shop .item .btn { min-width: 0; width: 100%; padding: 9px 12px; font-size: 13px; }
@@ -156,6 +156,7 @@
         align-items: center; justify-content: center; flex-direction: column; gap: 18px; font: 600 15px var(--cond);
         letter-spacing: 0.3em; color: var(--ink); text-align: center; padding: 16px; }
       #rotate .phone { width: 40px; height: 70px; border: 1px solid var(--ink); border-radius: 6px; animation: rot 1.8s ease-in-out infinite; }
+      #rotate .sub { font-size: 11px; letter-spacing: 0.2em; opacity: 0.7; }
       @keyframes rot { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
       @media (orientation: portrait) and (pointer: coarse) { #rotate { display: flex; } }
 
@@ -195,7 +196,7 @@
       <div id="banner"><h2></h2><p></p></div>
       <button id="pause-btn" aria-label="Pause">II</button>
       <div id="screens"></div>
-      <div id="rotate"><div class="phone"></div>ROTATE TO LANDSCAPE</div>
+      <div id="rotate"><div class="phone"></div>ROTATE TO LANDSCAPE<span class="sub">or tap to play fullscreen</span></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

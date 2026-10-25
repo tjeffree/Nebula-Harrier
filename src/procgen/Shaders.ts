@@ -442,7 +442,8 @@ export const GRADE_SHADER = {
     uniform float uTime, uDamage, uWarp, uSat, uContrast, uVig, uGrain, uCA;
     uniform vec3 uLift, uGain, uShadowTint, uHighTint;
     varying vec2 vUv;
-    float ghash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    // sin()-free hash: large sin() arguments lose precision on mobile GPUs and band into flickering stripes.
+    float ghash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
     void main() {
       vec2 uv = vUv;
       vec2 c = uv - 0.5;
@@ -461,7 +462,7 @@ export const GRADE_SHADER = {
       float v = smoothstep(0.9, 0.25, length(c * vec2(1.0, 0.78)));
       col *= mix(1.0 - uVig, 1.0, v);
       col = mix(col, vec3(0.9, 0.12, 0.08), uDamage * (1.0 - v) * 0.85);
-      col += (ghash(uv * uRes + fract(uTime * 7.3) * 91.0) - 0.5) * uGrain;
+      col += (ghash(floor(uv * uRes) + floor(fract(uTime * 7.3) * 97.0) * 17.0) - 0.5) * uGrain;
       gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
     }`,
 };

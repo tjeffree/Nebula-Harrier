@@ -1,9 +1,10 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { CopyShader } from 'three/examples/jsm/shaders/CopyShader.js';
 import { GRADE_SHADER, globalUniforms, type GradeSettings } from '../procgen/Shaders';
 
 export const CAMERA_POS = new THREE.Vector3(0, 3.5, 9.0);
@@ -32,6 +33,7 @@ export class Engine {
   readonly sun: THREE.DirectionalLight;
   readonly hemi: THREE.HemisphereLight;
   private readonly composer: EffectComposer;
+  private readonly scenePass: MsaaRenderPass;
   private readonly bloom: UnrealBloomPass;
   private readonly pmrem: THREE.PMREMGenerator;
   private envTarget: THREE.WebGLRenderTarget | null = null;
@@ -42,6 +44,8 @@ export class Engine {
   private elapsed = 0;
   /** Dynamic quality in [0,1]: drives pixel ratio, then MSAA, then bloom. */
   private quality = 1;
+  /** Highest quality still allowed; drops just below any level that proved too slow, so it never oscillates. */
+  private qualityCeiling = 1;
   private frameAvg = 1 / 60;
   private qualityTimer = 0;
   private fpsEl: HTMLElement | null = null;
@@ -83,11 +87,9 @@ export class Engine {
     this.scene.add(this.sun, this.sun.target, this.hemi);
     this.setSunDirection(new THREE.Vector3(0.42, 0.18, -1));
 
-    this.composer = new EffectComposer(
-      this.renderer,
-      new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
-    );
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType }));
+    this.scenePass = new MsaaRenderPass(this.scene, this.camera);
+    this.composer.addPass(this.scenePass);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.32, 0.55, 0.88);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
@@ -160,12 +162,7 @@ export class Engine {
     this.renderer.domElement.style.height = `${h}px`;
     // MSAA on the scene target and bloom only while the device keeps up.
     const samples = this.quality >= 0.75 ? 4 : 0;
-    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
-      if (rt.samples !== samples) {
-        rt.samples = samples;
-        rt.dispose();
-      }
-    }
+    this.scenePass.setSamples(samples);
     this.bloom.enabled = this.quality >= 0.5;
     this.composer.setPixelRatio(pr);
     this.composer.setSize(w, h);
@@ -208,14 +205,23 @@ export class Engine {
   }
 
   private trackPerformance(dt: number): void {
-    this.frameAvg += (dt - this.frameAvg) * 0.05;
+    // Hitches (tab switches, GC, the resize itself) must not count as sustained slowness.
+    if (dt < 0.1) this.frameAvg += (dt - this.frameAvg) * 0.05;
     this.qualityTimer += dt;
-    if (this.qualityTimer > 1.5) {
+    if (this.qualityTimer > 2) {
       this.qualityTimer = 0;
       const prev = this.quality;
-      if (this.frameAvg > 1 / 52) this.quality = Math.max(0, this.quality - 0.25);
-      else if (this.frameAvg < 1 / 58 && this.quality < 1) this.quality = Math.min(1, this.quality + 0.1);
-      if (prev !== this.quality) this.resize();
+      if (this.frameAvg > 1 / 50) {
+        this.qualityCeiling = Math.max(0, this.quality - 0.05);
+        this.quality = Math.max(0, this.quality - 0.25);
+      } else if (this.frameAvg < 1 / 58) {
+        this.quality = Math.min(this.qualityCeiling, this.quality + 0.1);
+      }
+      // Toggling bloom / MSAA / resolution reads as a flash, so only step when it changes things.
+      if (prev !== this.quality) {
+        this.resize();
+        this.frameAvg = 1 / 60;
+      }
     }
     if (this.fpsEl) {
       this.fpsAcc += dt;
@@ -233,5 +239,59 @@ export class Engine {
   private render(dt: number): void {
     this.renderer.info.reset();
     this.composer.render(dt);
+  }
+}
+
+/**
+ * Renders the scene into its own multisampled HDR target, then copies it into
+ * the composer's read buffer. Keeping MSAA out of the composer's ping-pong
+ * buffers matters: a multisampled target drawn into twice in one frame (scene,
+ * then bloom or output) intermittently resolves to black on Chrome / Android.
+ */
+class MsaaRenderPass extends Pass {
+  private readonly target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+  private readonly copy = new FullScreenQuad(
+    new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: CopyShader.vertexShader,
+      // MSAA can shade samples just outside a triangle, where some materials produce NaN/Inf.
+      // Invisible on its own, but bloom's blur smears one such pixel into a black block.
+      fragmentShader: /* glsl */ `
+        uniform sampler2D tDiffuse;
+        varying vec2 vUv;
+        void main() {
+          vec4 c = texture2D(tDiffuse, vUv);
+          bvec4 bad = bvec4(isnan(c.r) || isinf(c.r), isnan(c.g) || isinf(c.g), isnan(c.b) || isinf(c.b), false);
+          c.rgb = any(bad) ? vec3(0.0) : clamp(c.rgb, 0.0, 64.0);
+          gl_FragColor = vec4(c.rgb, 1.0);
+        }`,
+    }),
+  );
+
+  constructor(
+    private readonly scene: THREE.Scene,
+    private readonly camera: THREE.Camera,
+  ) {
+    super();
+    this.needsSwap = false;
+    (this.copy.material as THREE.ShaderMaterial).uniforms.tDiffuse.value = this.target.texture;
+  }
+
+  setSamples(samples: number): void {
+    if (this.target.samples === samples) return;
+    this.target.samples = samples;
+    this.target.dispose();
+  }
+
+  setSize(width: number, height: number): void {
+    this.target.setSize(width, height);
+  }
+
+  render(renderer: THREE.WebGLRenderer, _write: THREE.WebGLRenderTarget, read: THREE.WebGLRenderTarget): void {
+    renderer.setRenderTarget(this.target);
+    renderer.clear();
+    renderer.render(this.scene, this.camera);
+    renderer.setRenderTarget(read);
+    this.copy.render(renderer);
   }
 }
