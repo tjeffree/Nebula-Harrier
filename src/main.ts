@@ -27,15 +27,13 @@ import {
 import { ARCHETYPES, BOONS, BoonRegistry, type ArchetypeId, type BoonId, type RunStats } from './roguelite/BoonRegistry';
 import { MetaStore, UPGRADE_INFO, type UpgradeId } from './roguelite/MetaStore';
 
-// Raw hex colours are authored for direct display; keep them un-managed.
-THREE.ColorManagement.enabled = false;
-
 type State = 'title' | 'map' | 'sector' | 'bossIntro' | 'boss' | 'clear' | 'draft' | 'warp' | 'dying' | 'over' | 'victory' | 'shop';
 const PLAY_STATES: ReadonlySet<State> = new Set(['sector', 'bossIntro', 'boss', 'clear', 'warp', 'dying']);
 
 const params = new URLSearchParams(location.search);
 const QUICK = params.has('quick');
 const GOD = params.has('god');
+const AUTOSTART = params.has('autostart');
 const START_SECTOR = Math.max(1, Math.min(SECTOR_COUNT, Number(params.get('sector')) || 1));
 const BASE_RAIL_SPEED = 38;
 
@@ -64,6 +62,8 @@ class Game {
   private readonly trees: TreeField;
   private readonly foliage: THREE.Color[] = [];
   private readonly shadow: THREE.Mesh;
+  private readonly sky: THREE.Mesh;
+  private readonly sunDir = new THREE.Vector3();
   private readonly ctx: GameContext;
   private readonly spawner: Spawner;
 
@@ -88,7 +88,7 @@ class Game {
   private readonly chainBuf: Enemy[] = [];
   private readonly camLook = new THREE.Vector3();
   private readonly aimPoint = new THREE.Vector3();
-  private lastHud = { score: -1, time: -1, mult: '' };
+  private lastHud = { score: -1, time: -1, mult: '', hp: -1, heat: -1 };
   private menuReturn: (() => void) | null = null;
 
   // DOM.
@@ -104,7 +104,9 @@ class Game {
     this.music = new MusicTrackGen(this.sfx);
     const scene = this.engine.scene;
 
-    scene.add(createSky());
+    this.sky = createSky();
+    scene.add(this.sky);
+    scene.fog = new THREE.Fog(0xe2b38a, 45, 235);
     scene.add(createGround());
     const treeMeshes = createTreeInstanced(96);
     scene.add(treeMeshes.trunks, treeMeshes.canopies);
@@ -155,6 +157,16 @@ class Game {
     this.bindEvents();
     this.bindDom();
     this.showTitle();
+    if (AUTOSTART) {
+      this.startRun();
+      this.onAction('node', '0');
+      // Debug: simulate N seconds up front so the first rendered frame is mid-fight.
+      const warm = Number(params.get('warmup')) || 0;
+      for (let i = 0; i < warm * 30; i++) {
+        globalUniforms.uTime.value = i / 30;
+        this.update(1 / 30, i / 30);
+      }
+    }
     this.engine.start((dt, t) => this.update(dt, t));
     if (params.has('debug')) (window as unknown as { __nh: Game }).__nh = this;
   }
@@ -188,7 +200,7 @@ class Game {
     });
     bus.on('player:died', () => {
       const p = this.player.pos;
-      this.particles.explosion(p.x, p.y + 1, p.z - 1, 3, 0.6, 1.6, 2);
+      this.particles.explosion(p.x, p.y + 1, p.z - 1, 3, 1, 0.75, 0.4);
       this.sfx.explosion(2);
       this.shake = 1.2;
       this.setState('dying');
@@ -317,19 +329,50 @@ class Game {
   }
 
   private applyPalette(p: SectorPalette): void {
-    globalUniforms.uPalA.value.set(p.a);
-    globalUniforms.uPalB.value.set(p.b);
-    globalUniforms.uFogColor.value.set(p.haze);
-    globalUniforms.uSkyTop.value.set(p.skyTop);
-    globalUniforms.uGroundA.value.set(p.groundA);
-    globalUniforms.uGroundB.value.set(p.groundB);
+    const g = globalUniforms;
+    g.uPalA.value.set(p.a);
+    g.uPalB.value.set(p.b);
+    g.uFogColor.value.set(p.haze);
+    g.uSkyTop.value.set(p.skyTop);
+    g.uHorizon.value.set(p.horizon);
+    g.uGroundA.value.set(p.groundA);
+    g.uGroundB.value.set(p.groundB);
+    g.uSunColor.value.set(p.sun);
+    g.uSunDir.value.set(...p.sunDir).normalize();
+    g.uSunSize.value = p.sunSize;
+    g.uSunGlow.value = p.sunGlow;
+    g.uClouds.value = p.clouds;
+    g.uCloudLit.value.set(p.cloudLit);
+    g.uCloudShade.value.set(p.cloudShade);
+    g.uRidgeFar.value.set(p.ridgeFar);
+    g.uRidgeNear.value.set(p.ridgeNear);
+    g.uStars.value = p.stars;
+    const fogMul = this.ctx.fx.fogMul;
+    g.uFogNear.value = p.fogNear * fogMul;
+    g.uFogFar.value = p.fogFar * Math.max(0.6, fogMul);
+    const fog = this.engine.scene.fog as THREE.Fog;
+    fog.color.set(p.haze);
+    fog.near = g.uFogNear.value;
+    fog.far = g.uFogFar.value;
     this.engine.renderer.setClearColor(p.haze, 1);
+
+    // The light sits a little above the drawn sun so shadows stay long but readable.
+    const e = this.engine;
+    this.sunDir.set(p.sunDir[0], Math.max(0.15, p.sunDir[1] + 0.1), p.sunDir[2]);
+    e.setSunDirection(this.sunDir);
+    e.sun.color.set(p.sun);
+    e.sun.intensity = p.sunIntensity;
+    e.hemi.color.set(p.hemiSky);
+    e.hemi.groundColor.set(p.hemiGround);
+    e.hemi.intensity = p.hemiIntensity;
+    e.setBloom(p.bloom, 0.55, 0.88);
+    e.setGrade(p.grade, p.exposure);
+    e.updateEnvironment(this.sky);
+
+    (this.trees.trunks.material as THREE.MeshStandardMaterial).color.set(p.groundB);
     this.ctx.accentColor.set(p.a);
     this.foliage.length = 0;
     for (const c of p.foliage) this.foliage.push(new THREE.Color(c));
-    const fogMul = this.ctx.fx.fogMul;
-    globalUniforms.uFogNear.value = 60 * fogMul;
-    globalUniforms.uFogFar.value = 210 * Math.max(0.6, fogMul);
   }
 
   private spawnWyrms(n: number, rng: () => number): void {
@@ -392,8 +435,8 @@ class Game {
     const e = t as Enemy;
     e.damage(dmg, this.ctx);
     this.sfx.hit();
-    this.particles.spark(x, y, z, 0.6, 1.6, 2);
-    this.particles.spark(x, y, z, 2, 1.4, 0.6);
+    this.particles.spark(x, y, z, 2, 1.6, 1.0);
+    this.particles.spark(x, y, z, 1.6, 0.9, 0.4);
     const s = this.stats;
     if (s.chainTargets > 0) {
       const near = this.enemies.nearest(e.pos.x, e.pos.y, e.pos.z, s.chainRange, s.chainTargets, e, this.chainBuf);
@@ -445,13 +488,13 @@ class Game {
         for (const e of this.enemies.list) {
           if (e.alive && e.active && (e.pos.x - m.x) ** 2 + (e.pos.y - m.y) ** 2 + (e.pos.z - m.z) ** 2 < 4.5 * 4.5) e.damage(dmg, this.ctx);
         }
-        this.particles.explosion(m.x, m.y, m.z, 1.6, 0.6, 1.2, 2);
+        this.particles.explosion(m.x, m.y, m.z, 1.6, 1, 0.7, 0.35);
         this.sfx.explosion(0.9);
         this.mines.splice(i, 1);
         continue;
       }
       const pulse = 1 + Math.sin(this.ctx.time * 10 + i) * 0.15;
-      this.batch.push(m.x, m.y, m.z, ATLAS.MINE, 1.4 * pulse, 1.4 * pulse, this.ctx.time * 2, 0.8, 1.2, 2, Math.min(1, m.life));
+      this.batch.push(m.x, m.y, m.z, ATLAS.MINE, 1.4 * pulse, 1.4 * pulse, this.ctx.time * 2, 2, 1.2, 0.5, Math.min(1, m.life));
     }
   }
 
@@ -620,7 +663,7 @@ class Game {
     this.shadow.visible = this.player.alive;
     this.shadow.position.set(p.x, 0.04, p.z);
     this.shadow.scale.setScalar(1.25 * (1 - k * 0.45));
-    (this.shadow.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 0.38 * (1 - k * 0.6);
+    (this.shadow.material as THREE.ShaderMaterial).uniforms.uOpacity.value = 0.22 * (1 - k * 0.8);
   }
 
   // =========================================================================
@@ -633,6 +676,16 @@ class Game {
     $('#heat-fill').style.transform = `scaleX(${p.heat})`;
     $('#heat-bar').classList.toggle('hot', p.overheated);
     $('#dash-fill').style.transform = `scaleX(${1 - p.dashCooldownLeft / s.dashCooldown})`;
+    const hp = Math.ceil(p.hp);
+    if (hp !== this.lastHud.hp) {
+      this.lastHud.hp = hp;
+      $('#hp-num').textContent = String(hp);
+    }
+    const heat = Math.round(p.heat * 100);
+    if (heat !== this.lastHud.heat) {
+      this.lastHud.heat = heat;
+      $('#heat-num').textContent = String(heat);
+    }
     if (this.score !== this.lastHud.score) {
       this.lastHud.score = this.score;
       $('#hud-score').textContent = this.score.toLocaleString('en-US');
@@ -878,8 +931,8 @@ class Game {
         const cost = this.meta.cost(id);
         const pips = Array.from({ length: u.max }, (_, i) => `<i class="${i < u.tier ? 'on' : ''}"></i>`).join('');
         return `<div class="item">
-          <div class="name" style="font-weight:800;letter-spacing:.12em">${UPGRADE_INFO[id].name.toUpperCase()}</div>
-          <div class="desc" style="font-size:13px;color:#c8c0ec">${UPGRADE_INFO[id].desc}</div>
+          <div class="name">${UPGRADE_INFO[id].name}</div>
+          <div class="desc">${UPGRADE_INFO[id].desc}</div>
           <div class="pips">${pips}</div>
           <button class="btn" data-action="buy" data-arg="${id}" ${maxed || !this.meta.canBuy(id) ? 'disabled' : ''}>
             ${maxed ? 'Maxed' : `Buy · ${cost}`}
@@ -892,8 +945,8 @@ class Game {
       .map((id) => {
         const a = ARCHETYPES[id];
         return `<div class="item">
-          <div class="name" style="font-weight:800;letter-spacing:.12em">ARCHETYPE: ${a.name.toUpperCase()}</div>
-          <div class="desc" style="font-size:13px;color:#c8c0ec">${a.blurb}</div>
+          <div class="name">Archetype: ${a.name}</div>
+          <div class="desc">${a.blurb}</div>
           <div class="pips"></div>
           <button class="btn" data-action="unlock" data-arg="${id}" ${prof.chronocores < a.unlockCost ? 'disabled' : ''}>Unlock · ${a.unlockCost}</button>
         </div>`;

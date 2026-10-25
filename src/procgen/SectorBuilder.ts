@@ -1,3 +1,5 @@
+import type { GradeSettings } from './Shaders';
+
 /** Deterministic PRNG (mulberry32). */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -67,69 +69,196 @@ export function resolveModifiers(mods: readonly ModifierId[]): ModifierEffects {
 
 export interface SectorPalette {
   name: string;
-  /** Primary accent: swarm enemies, flowers, planet. */
+  /** Primary accent: swarm enemy panels, boss core, node swatch. */
   a: number;
-  /** Secondary accent: boss trim, planet rings. */
+  /** Secondary accent: boss trim and pods. */
   b: number;
+  /** Sky zenith. */
   skyTop: number;
+  /** Sky band just above the haze. */
+  horizon: number;
   /** Horizon haze, used for fog. */
   haze: number;
+  /** Sand on the flats. */
   groundA: number;
+  /** Exposed rock on slopes and spires. */
   groundB: number;
-  /** Tree canopy colours. */
+  /** Boulder tints at the foot of each spire. */
   foliage: number[];
+  sun: number;
+  /** Direction toward the sun disc in the sky; the light sits a little higher. */
+  sunDir: [number, number, number];
+  sunSize: number;
+  sunGlow: number;
+  sunIntensity: number;
+  hemiSky: number;
+  hemiGround: number;
+  hemiIntensity: number;
+  /** Cloud coverage 0..1. */
+  clouds: number;
+  cloudLit: number;
+  cloudShade: number;
+  ridgeFar: number;
+  ridgeNear: number;
+  stars: number;
+  exposure: number;
+  fogNear: number;
+  fogFar: number;
+  bloom: number;
+  grade: GradeSettings;
 }
 
+/** Five times of day and weather: the sector look comes from light, not paint. */
 export const PALETTES: SectorPalette[] = [
   {
-    name: 'Azure Meadows',
-    a: 0xff4f9a,
-    b: 0xffc93c,
-    skyTop: 0x2f8cff,
-    haze: 0xcdeeff,
-    groundA: 0x86d95c,
-    groundB: 0x6cc84d,
-    foliage: [0x4fbf4a, 0x7fd85a, 0xff9ec8],
+    name: 'Golden Hour',
+    a: 0xc9372c,
+    b: 0xe8742c,
+    skyTop: 0x47689a,
+    horizon: 0xf0b483,
+    haze: 0xe2b38a,
+    groundA: 0x8a7148,
+    groundB: 0xa7835a,
+    foliage: [0x8d6a52, 0x7a5c46, 0x9c7a5c],
+    sun: 0xffd6a0,
+    sunDir: [0.42, 0.075, -1],
+    sunSize: 0.0009,
+    sunGlow: 1,
+    sunIntensity: 3.6,
+    hemiSky: 0xa7bad6,
+    hemiGround: 0x6a5038,
+    hemiIntensity: 0.85,
+    clouds: 0.5,
+    cloudLit: 0xffe4c4,
+    cloudShade: 0x8b7f92,
+    ridgeFar: 0xc8957c,
+    ridgeNear: 0x8b6a5e,
+    stars: 0,
+    exposure: 0.95,
+    fogNear: 45,
+    fogFar: 235,
+    bloom: 0.32,
+    grade: { lift: [0.035, 0.03, 0.045], gain: [1.04, 1.0, 0.95], shadowTint: [-0.01, 0, 0.025], highTint: [0.03, 0.015, -0.01], saturation: 0.96, contrast: 1.07 },
   },
   {
-    name: 'Coral Dunes',
-    a: 0x23c9c0,
-    b: 0xff5e78,
-    skyTop: 0x4d7dff,
-    haze: 0xffe0c4,
-    groundA: 0xffc27a,
-    groundB: 0xf7ad5e,
-    foliage: [0xff7a8a, 0xffb347, 0x3cc9a6],
+    name: 'Noon Haze',
+    a: 0xd8462a,
+    b: 0x2f6fb0,
+    skyTop: 0x3b78c0,
+    horizon: 0xc9d6de,
+    haze: 0xd6d6cc,
+    groundA: 0xb39a72,
+    groundB: 0x9c7c5e,
+    foliage: [0x8a7458, 0xa08a6a, 0x766450],
+    sun: 0xfff3e0,
+    sunDir: [-0.3, 0.55, -1],
+    sunSize: 0.0007,
+    sunGlow: 0.7,
+    sunIntensity: 3.2,
+    hemiSky: 0xbcd2ea,
+    hemiGround: 0x8a7458,
+    hemiIntensity: 1.0,
+    clouds: 0.32,
+    cloudLit: 0xffffff,
+    cloudShade: 0xa9b4c2,
+    ridgeFar: 0xb9bcbc,
+    ridgeNear: 0x9a9286,
+    stars: 0,
+    exposure: 0.9,
+    fogNear: 50,
+    fogFar: 240,
+    bloom: 0.22,
+    grade: { lift: [0.03, 0.03, 0.035], gain: [1.02, 1.0, 0.97], shadowTint: [-0.01, 0, 0.02], highTint: [0.02, 0.01, 0], saturation: 0.92, contrast: 1.08 },
   },
   {
-    name: 'Lagoon Isles',
-    a: 0xff7a3d,
-    b: 0xfff35c,
-    skyTop: 0x22b8ff,
-    haze: 0xd8fff6,
-    groundA: 0x56dcbc,
-    groundB: 0x3ec9a8,
-    foliage: [0x2fbf71, 0x9be36d, 0xffd84d],
+    name: 'Storm Front',
+    a: 0xffa22e,
+    b: 0xd8dde3,
+    skyTop: 0x353e4c,
+    horizon: 0x7c838c,
+    haze: 0x868c90,
+    groundA: 0x5f5a52,
+    groundB: 0x6f665c,
+    foliage: [0x4c4842, 0x5a544c, 0x3f3c38],
+    sun: 0xcfd8e4,
+    sunDir: [0.1, 0.35, -1],
+    sunSize: 0,
+    sunGlow: 0.5,
+    sunIntensity: 1.6,
+    hemiSky: 0x9aa4b2,
+    hemiGround: 0x4a4640,
+    hemiIntensity: 1.25,
+    clouds: 0.85,
+    cloudLit: 0x9ea6b0,
+    cloudShade: 0x3c424c,
+    ridgeFar: 0x6c7278,
+    ridgeNear: 0x4c5056,
+    stars: 0,
+    exposure: 1.05,
+    fogNear: 30,
+    fogFar: 185,
+    bloom: 0.4,
+    grade: { lift: [0.03, 0.035, 0.045], gain: [0.98, 1.0, 1.03], shadowTint: [0, 0.005, 0.02], highTint: [0, 0, 0.01], saturation: 0.8, contrast: 1.12 },
   },
   {
-    name: 'Candy Twilight',
-    a: 0xffd84d,
-    b: 0x48e0ff,
-    skyTop: 0x6d5cff,
-    haze: 0xffc4e6,
-    groundA: 0xc6a2ff,
-    groundB: 0xb08cf5,
-    foliage: [0xff7ad9, 0x7fe0ff, 0xfff07a],
+    name: 'Ember Dusk',
+    a: 0x2fb4c8,
+    b: 0xffb35a,
+    skyTop: 0x2a2f55,
+    horizon: 0xe0704a,
+    haze: 0xc46a52,
+    groundA: 0x6b4a3c,
+    groundB: 0x8a5a44,
+    foliage: [0x5c3e32, 0x6e4a3a, 0x4a3328],
+    sun: 0xff9a5a,
+    sunDir: [-0.38, 0.045, -1],
+    sunSize: 0.0012,
+    sunGlow: 1.3,
+    sunIntensity: 3.0,
+    hemiSky: 0x7a6aa8,
+    hemiGround: 0x5a3428,
+    hemiIntensity: 0.8,
+    clouds: 0.45,
+    cloudLit: 0xffa47a,
+    cloudShade: 0x5a4a6e,
+    ridgeFar: 0xa85a52,
+    ridgeNear: 0x6a3a3c,
+    stars: 0.4,
+    exposure: 1.0,
+    fogNear: 42,
+    fogFar: 225,
+    bloom: 0.4,
+    grade: { lift: [0.04, 0.025, 0.05], gain: [1.05, 0.98, 0.95], shadowTint: [0, -0.005, 0.03], highTint: [0.03, 0.01, -0.01], saturation: 1.0, contrast: 1.08 },
   },
   {
-    name: 'Sunburst Plateau',
-    a: 0xe84393,
-    b: 0x2ec4ff,
-    skyTop: 0x3aa8ff,
-    haze: 0xfff3cc,
-    groundA: 0xffdd6b,
-    groundB: 0xf5c94a,
-    foliage: [0xff8a3d, 0xe84393, 0x6ad35a],
+    name: 'Blue Hour',
+    a: 0xff4a3a,
+    b: 0x8fd0ff,
+    skyTop: 0x0f1830,
+    horizon: 0x4a5a7c,
+    haze: 0x3e4a66,
+    groundA: 0x464852,
+    groundB: 0x56545e,
+    foliage: [0x3a3c46, 0x44424c, 0x30323a],
+    sun: 0xbcd4ff,
+    sunDir: [0.3, 0.22, -1],
+    sunSize: 0.0006,
+    sunGlow: 0.6,
+    sunIntensity: 1.5,
+    hemiSky: 0x5a6a9a,
+    hemiGround: 0x2a2c34,
+    hemiIntensity: 1.0,
+    clouds: 0.3,
+    cloudLit: 0x6a7aa0,
+    cloudShade: 0x252c44,
+    ridgeFar: 0x34405a,
+    ridgeNear: 0x232a3c,
+    stars: 1.2,
+    exposure: 1.25,
+    fogNear: 40,
+    fogFar: 215,
+    bloom: 0.55,
+    grade: { lift: [0.02, 0.025, 0.05], gain: [0.98, 1.0, 1.05], shadowTint: [0, 0.005, 0.03], highTint: [0.01, 0.01, 0.02], saturation: 0.95, contrast: 1.06 },
   },
 ];
 

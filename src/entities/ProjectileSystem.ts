@@ -245,7 +245,7 @@ export class ProjectileSystem {
     e.size[i] = opts.size ?? (opts.needle ? 1.3 : 1.0);
     e.cell[i] = opts.needle ? ATLAS.ENEMY_NEEDLE : ATLAS.ENEMY_ORB;
     e.homing[i] = opts.homing ?? 0;
-    const c = opts.color ?? 0xff4fa0;
+    const c = opts.color ?? 0xff3a4a;
     e.r[i] = ((c >> 16) & 255) / 255;
     e.g[i] = ((c >> 8) & 255) / 255;
     e.b[i] = (c & 255) / 255;
@@ -436,7 +436,7 @@ export class ParticleSystem {
     }
   }
 
-  /** Cartoon fireball flipbook + shockwave ring + sparkles + lingering smoke puffs. */
+  /** Fireball flipbook + shockwave ring + sparks + lingering dark smoke. */
   explosion(x: number, y: number, z: number, scale: number, r = 1, g = 0.82, b = 0.25): void {
     this.emit(x, y, z, 0, 0, 0, 0.6, 3.4 * scale, 6.5 * scale, 1, 1, 1, ATLAS.EXPLOSION_START, 0, 1);
     this.emit(x, y, z, 0, 0, 0, 0.35, 1 * scale, 9 * scale, r, g, b, ATLAS.RING, 0);
@@ -447,10 +447,11 @@ export class ParticleSystem {
       const oy = (Math.random() - 0.5) * 2.2 * scale;
       this.emit(x + ox, y + oy, z, ox * 2, oy * 2 + 1, 4, 0.5 + Math.random() * 0.3, 1.6 * scale, 4 * scale, 1, 1, 1, ATLAS.EXPLOSION_START, 1, 1);
     }
-    // Soft white smoke that drifts upward after the flash.
+    // Dark smoke that drifts upward after the flash.
     for (let k = 0; k < 2 + scale * 2; k++) {
       const ox = (Math.random() - 0.5) * 2.5 * scale;
-      this.emit(x + ox, y + (Math.random() - 0.3) * scale, z, ox * 0.8, 2 + Math.random() * 2, 3, 1.1 + Math.random() * 0.6, 1.5 * scale, 4.2 * scale, 1, 1, 1, ATLAS.PUFF, 1.2);
+      const g = 0.32 + Math.random() * 0.1;
+      this.emit(x + ox, y + (Math.random() - 0.3) * scale, z, ox * 0.8, 2 + Math.random() * 2, 3, 1.3 + Math.random() * 0.7, 1.5 * scale, 4.6 * scale, g, g * 0.95, g * 0.9, ATLAS.PUFF, 1.2);
     }
   }
 
@@ -516,7 +517,7 @@ export class ArcRenderer {
     this.lines = new THREE.LineSegments(
       geo,
       new THREE.LineBasicMaterial({
-        color: 0x2fd3ff,
+        color: 0xffc070,
         transparent: true,
         depthWrite: false,
       }),

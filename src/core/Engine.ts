@@ -1,5 +1,10 @@
 import * as THREE from 'three';
-import { createGradeMaterial, globalUniforms } from '../procgen/Shaders';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { GRADE_SHADER, globalUniforms, type GradeSettings } from '../procgen/Shaders';
 
 export const CAMERA_POS = new THREE.Vector3(0, 3.5, 9.0);
 export const CAMERA_TARGET = new THREE.Vector3(0, 1.5, -60.0);
@@ -8,27 +13,34 @@ const FOV = 58;
 const HORIZON_NDC_Y = -0.1;
 const MIN_PIXEL_RATIO = 1.0;
 const MAX_PIXEL_RATIO = 1.5;
+/** Where the sun's shadow frustum is centred: the stretch of rail where the action happens. */
+const SHADOW_FOCUS = new THREE.Vector3(0, 0, -22);
 
 export type UpdateFn = (dt: number, time: number) => void;
 
 /**
- * Owns the WebGL renderer, the fixed-perspective camera, the low-res scene
- * render target and the CRT composite pass, plus the RAF / resize loop.
+ * Owns the WebGL renderer, the fixed-perspective camera, the sun and sky
+ * lighting, the post chain (HDR scene → bloom → ACES tone map → film grade)
+ * and the RAF / resize loop with adaptive resolution, MSAA and bloom.
  */
 export class Engine {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
+  /** The final grade pass; main drives uDamage on it. */
   readonly post: THREE.ShaderMaterial;
-  private readonly rt: THREE.WebGLRenderTarget;
-  private readonly postScene = new THREE.Scene();
-  private readonly postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  readonly sun: THREE.DirectionalLight;
+  readonly hemi: THREE.HemisphereLight;
+  private readonly composer: EffectComposer;
+  private readonly bloom: UnrealBloomPass;
+  private readonly pmrem: THREE.PMREMGenerator;
+  private envTarget: THREE.WebGLRenderTarget | null = null;
   private readonly container: HTMLElement;
   private update: UpdateFn = () => {};
   private last = 0;
   private running = false;
   private elapsed = 0;
-  /** Dynamic resolution: quality in [0,1] maps into the clamped pixel-ratio range. */
+  /** Dynamic quality in [0,1]: drives pixel ratio, then MSAA, then bloom. */
   private quality = 1;
   private frameAvg = 1 / 60;
   private qualityTimer = 0;
@@ -40,33 +52,52 @@ export class Engine {
   constructor(container: HTMLElement) {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({
-      antialias: false, // MSAA happens on the scene render target instead
+      antialias: false, // MSAA happens on the HDR scene target instead
       powerPreference: 'high-performance',
       alpha: false,
       stencil: false,
       depth: true,
     });
-    this.renderer.setClearColor(0xcdeeff, 1);
-    this.renderer.autoClear = true;
+    this.renderer.setClearColor(0xe2b38a, 1);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.95;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.info.autoReset = false;
     container.appendChild(this.renderer.domElement);
 
-    this.camera = new THREE.PerspectiveCamera(FOV, 16 / 9, 0.1, 900);
+    this.camera = new THREE.PerspectiveCamera(FOV, 16 / 9, 0.1, 1200);
     this.camera.position.copy(CAMERA_POS);
     this.camera.lookAt(CAMERA_TARGET);
 
-    this.rt = new THREE.WebGLRenderTarget(1, 1, {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      depthBuffer: true,
-      stencilBuffer: false,
-      samples: 4,
-    });
-    this.post = createGradeMaterial();
-    this.post.uniforms.tDiffuse.value = this.rt.texture;
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.post);
-    quad.frustumCulled = false;
-    this.postScene.add(quad);
+    // Low sun ahead of the camera: every shape gets a hot rim and a long shadow toward the viewer.
+    this.sun = new THREE.DirectionalLight(0xffcf98, 3.6);
+    this.sun.castShadow = true;
+    const coarse = window.matchMedia('(pointer: coarse)').matches;
+    this.sun.shadow.mapSize.set(coarse ? 1024 : 2048, coarse ? 1024 : 2048);
+    Object.assign(this.sun.shadow.camera, { left: -24, right: 24, top: 34, bottom: -34, near: 1, far: 200 });
+    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.normalBias = 0.04;
+    this.sun.target.position.copy(SHADOW_FOCUS);
+    this.hemi = new THREE.HemisphereLight(0xa7bad6, 0x6a5038, 0.85);
+    this.scene.add(this.sun, this.sun.target, this.hemi);
+    this.setSunDirection(new THREE.Vector3(0.42, 0.18, -1));
+
+    this.composer = new EffectComposer(
+      this.renderer,
+      new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }),
+    );
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.32, 0.55, 0.88);
+    this.composer.addPass(this.bloom);
+    this.composer.addPass(new OutputPass());
+    const grade = new ShaderPass(GRADE_SHADER);
+    // ShaderPass clones uniforms; re-link the shared time / warp drivers.
+    grade.uniforms.uTime = globalUniforms.uTime;
+    grade.uniforms.uWarp = globalUniforms.uWarp;
+    this.composer.addPass(grade);
+    this.post = grade.material;
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
 
     if (new URLSearchParams(location.search).has('fps')) {
       this.fpsEl = document.createElement('div');
@@ -79,6 +110,38 @@ export class Engine {
     window.addEventListener('resize', () => this.resize());
     window.addEventListener('orientationchange', () => setTimeout(() => this.resize(), 120));
     this.resize();
+  }
+
+  /** Points the sun (light and shadows) along `dir`, measured toward the sun. */
+  setSunDirection(dir: THREE.Vector3): void {
+    this.sun.position.copy(dir).normalize().multiplyScalar(90).add(SHADOW_FOCUS);
+  }
+
+  setBloom(strength: number, radius: number, threshold: number): void {
+    this.bloom.strength = strength;
+    this.bloom.radius = radius;
+    this.bloom.threshold = threshold;
+  }
+
+  setGrade(g: GradeSettings, exposure: number): void {
+    const u = this.post.uniforms;
+    (u.uLift.value as THREE.Vector3).set(...g.lift);
+    (u.uGain.value as THREE.Vector3).set(...g.gain);
+    (u.uShadowTint.value as THREE.Vector3).set(...g.shadowTint);
+    (u.uHighTint.value as THREE.Vector3).set(...g.highTint);
+    u.uSat.value = g.saturation;
+    u.uContrast.value = g.contrast;
+    this.renderer.toneMappingExposure = exposure;
+  }
+
+  /** Re-captures the sky into the reflection environment used by every PBR surface. */
+  updateEnvironment(sky: THREE.Mesh): void {
+    const envScene = new THREE.Scene();
+    envScene.add(new THREE.Mesh(sky.geometry, sky.material));
+    const next = this.pmrem.fromScene(envScene, 0.02);
+    this.scene.environment = next.texture;
+    this.envTarget?.dispose();
+    this.envTarget = next;
   }
 
   private targetPixelRatio(): number {
@@ -95,16 +158,18 @@ export class Engine {
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = `${w}px`;
     this.renderer.domElement.style.height = `${h}px`;
-    // MSAA on the scene target only while the device keeps up.
+    // MSAA on the scene target and bloom only while the device keeps up.
     const samples = this.quality >= 0.75 ? 4 : 0;
-    if (this.rt.samples !== samples) {
-      this.rt.samples = samples;
-      this.rt.dispose();
+    for (const rt of [this.composer.renderTarget1, this.composer.renderTarget2]) {
+      if (rt.samples !== samples) {
+        rt.samples = samples;
+        rt.dispose();
+      }
     }
-    const bw = Math.floor(w * pr);
-    const bh = Math.floor(h * pr);
-    this.rt.setSize(bw, bh);
-    (this.post.uniforms.uRes.value as THREE.Vector2).set(bw, bh);
+    this.bloom.enabled = this.quality >= 0.5;
+    this.composer.setPixelRatio(pr);
+    this.composer.setSize(w, h);
+    (this.post.uniforms.uRes.value as THREE.Vector2).set(w * pr, h * pr);
     this.camera.aspect = w / h;
     this.updateProjection();
   }
@@ -128,7 +193,8 @@ export class Engine {
     const loop = (now: number) => {
       if (!this.running) return;
       requestAnimationFrame(loop);
-      const rawDt = Math.min((now - this.last) / 1000, 0.25);
+      // The first RAF timestamp can predate `last`; never feed a negative step.
+      const rawDt = Math.min(Math.max(0, (now - this.last) / 1000), 0.25);
       this.last = now;
       this.trackPerformance(rawDt);
       // Clamp to keep the damping term (1 - gamma*dt) positive and stable.
@@ -136,7 +202,7 @@ export class Engine {
       this.elapsed += dt;
       globalUniforms.uTime.value = this.elapsed;
       this.update(dt, this.elapsed);
-      this.render();
+      this.render(dt);
     };
     requestAnimationFrame(loop);
   }
@@ -157,18 +223,15 @@ export class Engine {
       if (this.fpsAcc >= 0.5) {
         this.fpsEl.textContent = `${Math.round(this.fpsFrames / this.fpsAcc)} fps · pr ${this.renderer
           .getPixelRatio()
-          .toFixed(2)} · calls ${this.renderer.info.render.calls}`;
+          .toFixed(2)} · q ${this.quality.toFixed(2)} · calls ${this.renderer.info.render.calls}`;
         this.fpsAcc = 0;
         this.fpsFrames = 0;
       }
     }
   }
 
-  private render(): void {
+  private render(dt: number): void {
     this.renderer.info.reset();
-    this.renderer.setRenderTarget(this.rt);
-    this.renderer.render(this.scene, this.camera);
-    this.renderer.setRenderTarget(null);
-    this.renderer.render(this.postScene, this.postCam);
+    this.composer.render(dt);
   }
 }

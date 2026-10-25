@@ -2,332 +2,301 @@ import * as THREE from 'three';
 
 /**
  * Uniforms shared by every procedural material. Mutating `.value` here
- * propagates to all materials without re-binding.
+ * propagates to all materials without re-binding. Colours are linear
+ * (ColorManagement converts the authored sRGB hex values on `.set()`).
  */
 export const globalUniforms = {
   uTime: { value: 0 },
   uScroll: { value: 0 },
-  /** Atmospheric haze; also the sky colour at the horizon. */
-  uFogColor: { value: new THREE.Color(0xcdeeff) },
-  uFogNear: { value: 60 },
-  uFogFar: { value: 210 },
-  uSkyTop: { value: new THREE.Color(0x2f8cff) },
-  uGroundA: { value: new THREE.Color(0x7fd65a) },
-  uGroundB: { value: new THREE.Color(0x63c24a) },
+  /** Aerial haze: fog colour and the sky right at the horizon. */
+  uFogColor: { value: new THREE.Color(0xe2b38a) },
+  uFogNear: { value: 45 },
+  uFogFar: { value: 235 },
+  /** Sky zenith and the band just above the haze. */
+  uSkyTop: { value: new THREE.Color(0x47689a) },
+  uHorizon: { value: new THREE.Color(0xf0b483) },
+  /** Terrain: flat ground and exposed rock. */
+  uGroundA: { value: new THREE.Color(0x8a7148) },
+  uGroundB: { value: new THREE.Color(0xa7835a) },
   /** Primary / secondary accent colours of the current sector. */
-  uPalA: { value: new THREE.Color(0xff4f9a) },
-  uPalB: { value: new THREE.Color(0xffd23f) },
-  uSunDir: { value: new THREE.Vector3(0.35, 0.8, 0.45).normalize() },
-  uSunColor: { value: new THREE.Color(0xfff4dc) },
+  uPalA: { value: new THREE.Color(0xc9372c) },
+  uPalB: { value: new THREE.Color(0xe8742c) },
+  /** Direction toward the sun disc as drawn in the sky. */
+  uSunDir: { value: new THREE.Vector3(0.42, 0.075, -1).normalize() },
+  uSunColor: { value: new THREE.Color(0xffd6a0) },
+  uSunSize: { value: 0.0009 },
+  uSunGlow: { value: 1 },
+  uClouds: { value: 0.5 },
+  uCloudLit: { value: new THREE.Color(0xffe4c4) },
+  uCloudShade: { value: new THREE.Color(0x8b7f92) },
+  uRidgeFar: { value: new THREE.Color(0xc8957c) },
+  uRidgeNear: { value: new THREE.Color(0x8b6a5e) },
+  uStars: { value: 0 },
   uWarp: { value: 0 },
 };
 
-const FOG_PARS = /* glsl */ `
-uniform vec3 uFogColor;
-uniform float uFogNear;
-uniform float uFogFar;
+/**
+ * Rugged canyon height field: rolling side walls plus ridged sine octaves.
+ * Mirrored exactly in TS by {@link terrainY} so props sit on the ground.
+ * Sines (not hashed noise) keep the CPU and GPU results identical.
+ */
+const TERRAIN_GLSL = /* glsl */ `
+float terrainH(float x, float zs) {
+  float side = smoothstep(14.0, 58.0, abs(x));
+  float roll = 0.5 + 0.5 * sin(zs * 0.045 + x * 0.07) * cos(zs * 0.021 - x * 0.05);
+  float r1 = 1.0 - abs(sin(zs * 0.11 + x * 0.13) * cos(zs * 0.07 - x * 0.09 + 1.3));
+  float r2 = 1.0 - abs(sin(zs * 0.23 - x * 0.19 + 2.1) * cos(zs * 0.17 + x * 0.21));
+  float ridge = r1 * r1 * 0.65 + r2 * r2 * 0.35;
+  return side * side * (8.0 + 18.0 * side) * (0.45 + 0.55 * roll) + side * ridge * 10.0 + side * 1.2;
+}
 `;
 
-/** Shared rolling-hill height field (also mirrored in TS by groundHeight). */
-const HILLS_GLSL = /* glsl */ `
-float hills(float x, float zs) {
-  float ax = abs(x);
-  float side = smoothstep(15.0, 60.0, ax);
-  float roll = 0.55 + 0.45 * sin(zs * 0.045 + x * 0.07) * cos(zs * 0.021 - x * 0.05);
-  return side * side * (10.0 + 14.0 * side) * roll + side * 1.5;
+const NOISE_GLSL = /* glsl */ `
+float nhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float vnoise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(nhash(i), nhash(i + vec2(1, 0)), f.x), mix(nhash(i + vec2(0, 1)), nhash(i + vec2(1, 1)), f.x), f.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++) { v += a * vnoise(p); p = p * 2.03 + 1.7; a *= 0.5; }
+  return v / 0.97;
 }
 `;
 
 // ---------------------------------------------------------------------------
-// Toon material: soft two-band cel lighting, hemisphere ambient, glossy toon
-// specular and a Fresnel rim (edge-gaze glow, clamp(1 - N·V)^2.5) so shapes
-// pop against bright skies without any post-processing bloom.
+// Surface material: MeshStandardMaterial (physically based, shadowed, fogged,
+// lit by the sun, the sky hemisphere and sky reflections) with two hooks:
+// a Fresnel edge light (uEdge) and a hit flash that blooms to white (uFlash).
 // ---------------------------------------------------------------------------
-const TOON_VERT = /* glsl */ `
-varying vec3 vN;
-varying vec3 vWPos;
-varying vec3 vTint;
-varying float vDist;
-void main() {
-  vec4 lp = vec4(position, 1.0);
-  vec3 n = normal;
-  #ifdef USE_INSTANCING
-    lp = instanceMatrix * lp;
-    n = mat3(instanceMatrix) * n;
-  #endif
-  vTint = vec3(1.0);
-  #ifdef USE_INSTANCING_COLOR
-    vTint = instanceColor;
-  #endif
-  #ifdef USE_COLOR
-    vTint *= color;
-  #endif
-  vec4 wp = modelMatrix * lp;
-  vWPos = wp.xyz;
-  vN = normalize(mat3(modelMatrix) * n);
-  vec4 mv = viewMatrix * wp;
-  vDist = -mv.z;
-  gl_Position = projectionMatrix * mv;
+export interface SurfaceUniforms {
+  uFlash: { value: number };
+  uEdge: { value: THREE.Color };
+  uRim: { value: number };
 }
-`;
+export type SurfaceMaterial = THREE.MeshStandardMaterial & { uniforms: SurfaceUniforms };
 
-const TOON_FRAG = /* glsl */ `
-uniform vec3 uBase;
-uniform vec3 uEdge;
-uniform float uGloss;
-uniform float uEmissive;
-uniform float uFlash;
-uniform float uOpacity;
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uSkyTop;
-uniform vec3 uGroundA;
-${FOG_PARS}
-varying vec3 vN;
-varying vec3 vWPos;
-varying vec3 vTint;
-varying float vDist;
-void main() {
-  vec3 N = normalize(vN);
-  if (!gl_FrontFacing) N = -N;
-  vec3 V = normalize(cameraPosition - vWPos);
-  vec3 L = normalize(uSunDir);
-  vec3 base = uBase * vTint;
-  float ndl = dot(N, L);
-  // Two soft cel bands.
-  float diff = smoothstep(-0.1, 0.05, ndl) * 0.55 + smoothstep(0.35, 0.5, ndl) * 0.45;
-  vec3 amb = mix(uGroundA * 0.55 + 0.25, uSkyTop * 0.5 + 0.5, N.y * 0.5 + 0.5) * 0.5;
-  vec3 col = base * (amb + uSunColor * diff * 0.75);
-  // Toon specular highlight.
-  vec3 H = normalize(L + V);
-  col += smoothstep(0.9, 0.95, dot(N, H)) * uGloss * 0.8;
-  // Fresnel rim light.
-  float rim = pow(clamp(1.0 - dot(N, V), 0.0, 1.0), 2.5);
-  col += uEdge * rim * 0.75;
-  col = mix(col, base * 1.15 + 0.1, uEmissive);
-  col = mix(col, vec3(1.0), clamp(uFlash, 0.0, 1.0));
-  float f = smoothstep(uFogNear, uFogFar, vDist);
-  gl_FragColor = vec4(mix(col, uFogColor, f), uOpacity);
-}
-`;
-
-export interface ToonOptions {
+export interface SurfaceOptions {
   color: THREE.ColorRepresentation;
-  /** Rim-light colour (defaults to white). */
+  /** Fresnel edge-light colour (defaults to a warm sky tint). */
   rim?: THREE.ColorRepresentation;
-  gloss?: number;
+  /** Edge-light strength. */
+  rimStrength?: number;
+  roughness?: number;
+  metalness?: number;
+  /** 0..1: how much the base colour glows on its own (HDR, feeds bloom). */
   emissive?: number;
   opacity?: number;
   vertexColors?: boolean;
+  flatShading?: boolean;
 }
 
-export function createToonMaterial(o: ToonOptions): THREE.ShaderMaterial {
+export function createSurfaceMaterial(o: SurfaceOptions): SurfaceMaterial {
   const opacity = o.opacity ?? 1;
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uBase: { value: new THREE.Color(o.color) },
-      uEdge: { value: new THREE.Color(o.rim ?? 0xffffff) },
-      uGloss: { value: o.gloss ?? 0.6 },
-      uEmissive: { value: o.emissive ?? 0 },
-      uFlash: { value: 0 },
-      uOpacity: { value: opacity },
-      uSunDir: globalUniforms.uSunDir,
-      uSunColor: globalUniforms.uSunColor,
-      uSkyTop: globalUniforms.uSkyTop,
-      uGroundA: globalUniforms.uGroundA,
-      uFogColor: globalUniforms.uFogColor,
-      uFogNear: globalUniforms.uFogNear,
-      uFogFar: globalUniforms.uFogFar,
-    },
-    vertexShader: TOON_VERT,
-    fragmentShader: TOON_FRAG,
+  const glow = o.emissive ?? 0;
+  const mat = new THREE.MeshStandardMaterial({
+    color: o.color,
+    roughness: o.roughness ?? 0.55,
+    metalness: o.metalness ?? 0.1,
+    emissive: glow > 0 ? new THREE.Color(o.color) : new THREE.Color(0x000000),
+    emissiveIntensity: glow * 4,
     vertexColors: o.vertexColors ?? false,
+    flatShading: o.flatShading ?? false,
     transparent: opacity < 1,
-  });
+    opacity,
+  }) as SurfaceMaterial;
+  const uniforms: SurfaceUniforms = {
+    uFlash: { value: 0 },
+    uEdge: { value: new THREE.Color(o.rim ?? 0xffd2a8) },
+    uRim: { value: o.rimStrength ?? 0.35 },
+  };
+  mat.uniforms = uniforms;
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, uniforms);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uFlash;\nuniform vec3 uEdge;\nuniform float uRim;')
+      .replace(
+        '#include <opaque_fragment>',
+        `{
+          float fres = pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0);
+          outgoingLight += uEdge * fres * uRim;
+          outgoingLight = mix(outgoingLight, vec3(3.0, 2.9, 2.7), saturate(uFlash) * 0.75);
+        }
+        #include <opaque_fragment>`,
+      );
+  };
+  return mat;
+}
+
+/**
+ * Instanced hard-surface material for swarm enemies. A per-vertex `aTint`
+ * attribute picks the part: 0 = neutral hull, 1 = accent panel (instance
+ * colour), 2 = glowing sensor (instance colour, HDR). When the instance
+ * colour is driven to white (hit flash) the hull flashes too.
+ */
+export function createInstancedHullMaterial(hull: THREE.ColorRepresentation): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({ color: hull, roughness: 0.42, metalness: 0.65 });
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aTint;\nvarying float vTint;')
+      .replace('#include <color_vertex>', '#include <color_vertex>\nvTint = aTint;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vTint;')
+      .replace(
+        '#include <color_fragment>',
+        `float flashK = smoothstep(0.55, 0.95, min(vColor.r, min(vColor.g, vColor.b)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vColor, step(0.5, vTint));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0), flashK);`,
+      )
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vColor * 4.0 * step(1.5, vTint) + flashK * 1.5;');
+  };
+  return mat;
 }
 
 // ---------------------------------------------------------------------------
-// Terrain: infinite scrolling soft checker meadow with rolling side hills and
-// planetary curvature (vertices pulled down quadratically with distance).
+// Terrain: a scrolling canyon floor. MeshStandardMaterial with the vertex
+// stage displaced by the height field (smooth analytic normals, planetary
+// curvature) and the albedo built procedurally: sand flats, banded rock on
+// slopes, wind ripples and scrub patches that give the speed cue.
 // ---------------------------------------------------------------------------
-export function createGroundMaterial(): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uCurve: { value: 0.0012 },
-      uScroll: globalUniforms.uScroll,
-      uTime: globalUniforms.uTime,
-      uGroundA: globalUniforms.uGroundA,
-      uGroundB: globalUniforms.uGroundB,
-      uPalA: globalUniforms.uPalA,
-      uPalB: globalUniforms.uPalB,
-      uSunDir: globalUniforms.uSunDir,
-      uFogColor: globalUniforms.uFogColor,
-      uFogNear: globalUniforms.uFogNear,
-      uFogFar: globalUniforms.uFogFar,
-    },
-    vertexShader: /* glsl */ `
-      uniform float uCurve;
-      uniform float uScroll;
-      varying vec3 vW;
-      varying vec3 vN;
-      varying float vDist;
-      ${HILLS_GLSL}
-      void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        float zs = wp.z - uScroll;
-        float h0 = hills(wp.x, zs);
-        // Central differences give a smooth normal (no faceting on the hills).
-        float e = 0.75;
-        float hx = (hills(wp.x + e, zs) - hills(wp.x - e, zs)) / (2.0 * e);
-        float hz = (hills(wp.x, zs + e) - hills(wp.x, zs - e)) / (2.0 * e);
-        float d = max(0.0, -wp.z - 30.0);
-        hz += 2.0 * d * uCurve;
-        vN = normalize(vec3(-hx, 1.0, -hz));
-        wp.y += h0;
-        wp.y -= d * d * uCurve;
-        vW = vec3(wp.x, wp.y, zs);
-        vec4 mv = viewMatrix * wp;
-        vDist = -mv.z;
-        gl_Position = projectionMatrix * mv;
-      }`,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uGroundA;
-      uniform vec3 uGroundB;
-      uniform vec3 uPalA;
-      uniform vec3 uPalB;
-      uniform vec3 uSunDir;
-      uniform float uTime;
-      ${FOG_PARS}
-      varying vec3 vW;
-      varying vec3 vN;
-      varying float vDist;
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float noise(vec2 p) {
-        vec2 i = floor(p), f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
-      }
-      void main() {
-        vec2 p = vW.xz;
-        // Soft, anti-aliased checker (the classic rail-shooter speed cue).
-        vec2 q = p / 7.0;
-        vec2 w = fwidth(q) * 1.5;
-        vec2 s = smoothstep(-w, w, sin(q * 3.14159) * 0.5);
-        float checker = s.x * s.y + (1.0 - s.x) * (1.0 - s.y);
-        vec3 col = mix(uGroundA, uGroundB, checker);
-        // Organic tonal patches.
-        float n = noise(p * 0.05) * 0.6 + noise(p * 0.21) * 0.4;
-        col *= 0.9 + n * 0.2;
-        // Lighting from the actual surface slope (hills).
-        vec3 N = normalize(vN);
-        float ndl = clamp(dot(N, normalize(uSunDir)), 0.0, 1.0);
-        col *= 0.7 + 0.45 * smoothstep(0.2, 0.9, ndl);
-        // Scattered flower dots on the meadow.
-        vec2 fc = floor(p / 2.5);
-        float h = hash(fc);
-        vec2 fp = fract(p / 2.5) - 0.5 - (vec2(hash(fc + 3.1), hash(fc + 7.7)) - 0.5) * 0.6;
-        float flower = step(0.86, h) * smoothstep(0.12, 0.06, length(fp)) * (1.0 - smoothstep(60.0, 110.0, vDist));
-        col = mix(col, mix(uPalA, uPalB, step(0.93, h)), flower * 0.9);
-        float f = smoothstep(uFogNear, uFogFar, vDist);
-        gl_FragColor = vec4(mix(col, uFogColor, f), 1.0);
-      }`,
-  });
+export function createGroundMaterial(): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0, envMapIntensity: 0.35 });
+  const u = {
+    uCurve: { value: 0.0012 },
+    uScroll: globalUniforms.uScroll,
+    uGroundA: globalUniforms.uGroundA,
+    uGroundB: globalUniforms.uGroundB,
+  };
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>\nuniform float uCurve;\nuniform float uScroll;\nvarying vec4 vGround;\n${TERRAIN_GLSL}`)
+      .replace(
+        '#include <beginnormal_vertex>',
+        `vec3 gW = (modelMatrix * vec4(position, 1.0)).xyz;
+        float gZs = gW.z - uScroll;
+        float gH = terrainH(gW.x, gZs);
+        float ge = 0.6;
+        float ghx = (terrainH(gW.x + ge, gZs) - terrainH(gW.x - ge, gZs)) / (2.0 * ge);
+        float ghz = (terrainH(gW.x, gZs + ge) - terrainH(gW.x, gZs - ge)) / (2.0 * ge);
+        float gD = max(0.0, -gW.z - 30.0);
+        ghz += 2.0 * gD * uCurve;
+        vec3 objectNormal = normalize(vec3(-ghx, 1.0, -ghz));
+        vGround = vec4(gW.x, gH, gZs, 1.0 - objectNormal.y);`,
+      )
+      .replace('#include <begin_vertex>', 'vec3 transformed = vec3(position);\ntransformed.y += gH - gD * gD * uCurve;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nuniform vec3 uGroundA;\nuniform vec3 uGroundB;\nvarying vec4 vGround;\n${NOISE_GLSL}`)
+      .replace(
+        'vec4 diffuseColor = vec4( diffuse, opacity );',
+        `vec2 gp = vGround.xz;
+        float gh = vGround.y;
+        float slope = vGround.w;
+        float n1 = fbm(gp * 0.035);
+        float n2 = vnoise(gp * 0.45);
+        float rockK = smoothstep(0.1, 0.38, slope + (n1 - 0.5) * 0.18);
+        vec3 sand = uGroundA * (0.82 + 0.32 * n1) * (0.94 + 0.08 * n2);
+        // Wind ripples across the rail and darker drift lines along it.
+        float ripple = sin(gp.y * 1.6 + n1 * 9.0 + gp.x * 0.15);
+        sand *= 0.95 + 0.05 * ripple;
+        // Scrub patches: scattered dark tufts, the main sense of speed.
+        vec2 cellId = floor(gp / 3.2);
+        float hsh = nhash(cellId);
+        vec2 off = fract(gp / 3.2) - 0.5 - (vec2(nhash(cellId + 3.1), nhash(cellId + 7.7)) - 0.5) * 0.55;
+        float tuft = step(0.72, hsh) * smoothstep(0.2, 0.07, length(off * vec2(1.0, 1.4)));
+        sand = mix(sand, uGroundA * vec3(0.42, 0.44, 0.3), tuft * 0.75);
+        // Sedimentary bands on exposed rock.
+        float band = sin(gh * 2.1 + n1 * 3.0) * 0.5 + 0.5;
+        vec3 rock = uGroundB * (0.78 + 0.3 * band) * (0.9 + 0.2 * n2);
+        rock = mix(rock, uGroundB * 1.25, smoothstep(0.6, 0.95, band) * 0.4);
+        vec4 diffuseColor = vec4(mix(sand, rock, rockK), opacity);`,
+      );
+  };
+  return mat;
 }
 
 // ---------------------------------------------------------------------------
-// Daytime sky dome: gradient, sun with glow, drifting cumulus and a big
-// ringed planet hanging over the horizon.
+// Sky dome: zenith-to-horizon gradient, sun disc and glow, lit cumulus with
+// cheap self-shadowing, two ridgelines with aerial perspective, horizon haze,
+// optional stars, and the warp streaks.
 // ---------------------------------------------------------------------------
 export function createSkyMaterial(): THREE.ShaderMaterial {
+  const g = globalUniforms;
   return new THREE.ShaderMaterial({
     uniforms: {
-      uTime: globalUniforms.uTime,
-      uSkyTop: globalUniforms.uSkyTop,
-      uFogColor: globalUniforms.uFogColor,
-      uPalA: globalUniforms.uPalA,
-      uPalB: globalUniforms.uPalB,
-      uSunColor: globalUniforms.uSunColor,
-      uScroll: globalUniforms.uScroll,
-      uWarp: globalUniforms.uWarp,
+      uTime: g.uTime,
+      uScroll: g.uScroll,
+      uSkyTop: g.uSkyTop,
+      uHorizon: g.uHorizon,
+      uFogColor: g.uFogColor,
+      uSunDir: g.uSunDir,
+      uSunColor: g.uSunColor,
+      uSunSize: g.uSunSize,
+      uSunGlow: g.uSunGlow,
+      uClouds: g.uClouds,
+      uCloudLit: g.uCloudLit,
+      uCloudShade: g.uCloudShade,
+      uRidgeFar: g.uRidgeFar,
+      uRidgeNear: g.uRidgeNear,
+      uStars: g.uStars,
+      uWarp: g.uWarp,
     },
     vertexShader: /* glsl */ `
       varying vec3 vDir;
       void main() {
-        vDir = normalize(position);
+        vDir = position;
         vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         gl_Position = p.xyww;
       }`,
     fragmentShader: /* glsl */ `
-      uniform float uTime;
-      uniform vec3 uSkyTop;
-      uniform vec3 uFogColor;
-      uniform vec3 uPalA;
-      uniform vec3 uPalB;
-      uniform vec3 uSunColor;
-      uniform float uScroll;
-      uniform float uWarp;
+      uniform float uTime, uScroll, uSunSize, uSunGlow, uClouds, uStars, uWarp;
+      uniform vec3 uSkyTop, uHorizon, uFogColor, uSunDir, uSunColor, uCloudLit, uCloudShade, uRidgeFar, uRidgeNear;
       varying vec3 vDir;
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float noise(vec2 p) {
-        vec2 i = floor(p), f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
-      }
-      float fbm(vec2 p) {
-        float v = 0.0, a = 0.5;
-        for (int i = 0; i < 3; i++) { v += a * noise(p); p = p * 2.03 + 1.7; a *= 0.5; }
-        return v;
-      }
+      ${NOISE_GLSL}
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 col = mix(uFogColor, uSkyTop, pow(smoothstep(-0.02, 0.75, h), 0.65));
+        float az = atan(d.x, -d.z);
+        vec3 col = mix(uHorizon, uSkyTop, pow(clamp(h, 0.0, 1.0), 0.45));
 
-        // Ringed planet.
-        vec3 pc = normalize(vec3(-0.55, 0.32, -1.0));
-        vec3 pu = normalize(cross(pc, vec3(0.0, 1.0, 0.0)));
-        vec3 pv = cross(pu, pc);
-        vec2 pp = vec2(dot(d, pu), dot(d, pv)) / 0.16;
-        float pr = length(pp);
-        if (dot(d, pc) > 0.0) {
-          vec2 rp = vec2(pp.x * 0.92 + pp.y * 0.4, (pp.y - pp.x * 0.35) * 3.6);
-          float rr = length(rp);
-          float ring = smoothstep(1.3, 1.35, rr) * smoothstep(2.05, 1.95, rr) * (0.75 + 0.25 * sin(rr * 40.0));
-          vec3 ringCol = mix(uPalB, vec3(1.0), 0.45);
-          bool ringFront = rp.y > 0.0;
-          if (!ringFront) col = mix(col, ringCol, ring * 0.55);
-          if (pr < 1.0) {
-            float band = sin(pp.y * 9.0 + sin(pp.x * 3.0) * 0.6);
-            vec3 pcol = mix(mix(uPalA, vec3(1.0), 0.45), mix(uPalA, uPalB, 0.5), band * 0.5 + 0.5);
-            float shade = smoothstep(-0.9, 0.6, -pp.x * 0.7 + pp.y * 0.7);
-            pcol *= 0.7 + 0.3 * shade;
-            float limb = smoothstep(1.0, 0.96, pr);
-            col = mix(col, pcol, limb * 0.85);
-          }
-          if (ringFront) col = mix(col, ringCol, ring * 0.7);
+        if (uStars > 0.0) {
+          vec2 sp = vec2(az * 160.0, h * 160.0);
+          float r = nhash(floor(sp));
+          float st = step(0.985, r) * smoothstep(0.12, 0.0, length(fract(sp) - 0.5)) * smoothstep(0.08, 0.4, h);
+          col += st * uStars * (0.6 + 0.4 * sin(uTime * 2.0 + r * 40.0));
         }
 
-        // Sun.
-        vec3 sd = normalize(vec3(0.38, 0.22, -1.0));
+        vec3 sd = normalize(uSunDir);
         float s = max(dot(d, sd), 0.0);
-        col += uSunColor * (pow(s, 12.0) * 0.35 + pow(s, 120.0) * 0.6);
-        col = mix(col, vec3(1.0, 0.99, 0.92), smoothstep(0.9990, 0.9994, s));
+        col += uSunColor * (pow(s, 4.0) * 0.14 + pow(s, 40.0) * 0.45 + pow(s, 400.0) * 1.2) * uSunGlow;
+        col = mix(col, uSunColor * 3.5, smoothstep(1.0 - uSunSize, 1.0 - uSunSize * 0.6, s));
 
-        // Cumulus layer projected onto a high plane, drifting with the rail.
-        if (h > 0.0) {
-          vec2 cp = d.xz / (h + 0.08) * 0.9 + vec2(uTime * 0.01, -uScroll * 0.0025);
-          float c = fbm(cp * 0.9);
-          float cloud = smoothstep(0.5, 0.72, c) * smoothstep(0.0, 0.12, h);
-          float lit = smoothstep(0.45, 0.85, fbm(cp * 0.9 + vec2(0.06, 0.09)));
-          vec3 cc = mix(vec3(1.0), mix(uSkyTop, vec3(1.0), 0.55), lit * 0.8);
-          col = mix(col, cc, cloud * 0.92);
+        if (uClouds > 0.0 && h > 0.0) {
+          vec2 cp = d.xz / (h + 0.06) * 0.55 + vec2(uTime * 0.004, -uScroll * 0.0011);
+          float c = fbm(cp);
+          float cov = 1.0 - uClouds;
+          float dens = smoothstep(cov, cov + 0.22, c);
+          vec2 sdir = normalize(sd.xz + 1e-4);
+          float c2 = fbm(cp + vec2(sdir.x, -sdir.y) * 0.09);
+          float lit = clamp((c - c2) * 5.0 + 0.55, 0.0, 1.0);
+          vec3 cc = mix(uCloudShade, uCloudLit, lit);
+          cc += uSunColor * pow(s, 8.0) * 1.2 * (1.0 - dens * 0.6) * uSunGlow;
+          col = mix(col, cc, dens * smoothstep(0.0, 0.1, h));
         }
 
-        // Warp: stretched light streaks.
+        // Two ridgelines; the far one sinks further into the haze.
+        float r1 = 0.01 + pow(fbm(vec2(az * 2.6, 1.3)), 1.6) * 0.11;
+        float r2 = 0.003 + pow(fbm(vec2(az * 4.4 + 7.0, 4.1)), 1.8) * 0.07;
+        col = mix(col, uRidgeFar, smoothstep(r1, r1 - 0.0015, h));
+        col = mix(col, uRidgeNear, smoothstep(r2, r2 - 0.0015, h));
+
+        col = mix(col, uFogColor, exp(-abs(h) * 16.0) * 0.8);
+        if (h < 0.0) col = mix(col, uFogColor, smoothstep(0.0, -0.08, h));
+
         if (uWarp > 0.01) {
-          vec2 sp = vec2(atan(d.x, -d.z) * 60.0, h * 4.0);
-          float streak = step(0.985, hash(floor(sp))) * uWarp;
-          col = mix(col, vec3(1.0), streak);
+          vec2 sp = vec2(az * 60.0, h * 4.0);
+          col = mix(col, vec3(2.5), step(0.985, nhash(floor(sp))) * uWarp);
         }
         gl_FragColor = vec4(col, 1.0);
       }`,
@@ -340,7 +309,9 @@ export function createSkyMaterial(): THREE.ShaderMaterial {
 // Instanced billboard sprite shader sampling the baked atlas.
 // Per-instance: aPos (xyz), aParams (cell, sizeX, sizeY, rotation), aColor (rgba).
 // Tintable cells decode rgb = mix(tint, white, tex.r) * tex.g; the explosion
-// flipbook cells are baked in full colour.
+// flipbook cells are baked in full colour (sRGB). Output is premultiplied so a
+// single blend mode covers both: hot cells add light (bloom picks up their
+// white cores), smoke cells cover what is behind them.
 // ---------------------------------------------------------------------------
 export function createSpriteMaterial(atlas: THREE.Texture, cols: number, fullColorStart: number, fullColorEnd: number): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
@@ -364,18 +335,24 @@ export function createSpriteMaterial(atlas: THREE.Texture, cols: number, fullCol
       varying vec4 vColor;
       varying float vFull;
       varying float vFog;
+      varying float vHot;
       void main() {
         vec4 center = modelViewMatrix * vec4(aPos, 1.0);
         float c = cos(aParams.w), s = sin(aParams.w);
         vec2 q = position.xy * aParams.yz;
         center.xy += vec2(c * q.x - s * q.y, s * q.x + c * q.y);
         gl_Position = projectionMatrix * center;
-        float col = mod(aParams.x, uCols);
-        float row = floor(aParams.x / uCols);
+        float cell = aParams.x;
+        float col = mod(cell, uCols);
+        float row = floor(cell / uCols);
         vUv = vec2((col + uv.x) / uCols, 1.0 - (row + 1.0 - uv.y) / uCols);
-        vFull = step(uFull.x - 0.5, aParams.x) * step(aParams.x, uFull.y + 0.5);
+        vFull = step(uFull.x - 0.5, cell) * step(cell, uFull.y + 0.5);
+        // Projectiles, sparks, mines and rings glow; smoke puffs (15) and the
+        // distant enemy silhouette (13) do not.
+        vHot = (cell < 3.5 || abs(cell - 12.0) < 0.5 || abs(cell - 14.0) < 0.5) ? 1.0 : 0.0;
         vFog = smoothstep(uFogNear, uFogFar, -center.z);
-        vColor = aColor;
+        // Authored tints are sRGB; values above 1 are deliberate HDR boosts.
+        vColor = vec4(pow(max(aColor.rgb, vec3(0.0)), vec3(2.2)), aColor.a);
       }`,
     fragmentShader: /* glsl */ `
       uniform sampler2D uAtlas;
@@ -384,23 +361,32 @@ export function createSpriteMaterial(atlas: THREE.Texture, cols: number, fullCol
       varying vec4 vColor;
       varying float vFull;
       varying float vFog;
+      varying float vHot;
       void main() {
         vec4 t = texture2D(uAtlas, vUv);
-        vec3 tinted = mix(vColor.rgb, vec3(1.0), t.r) * t.g;
-        vec3 rgb = mix(tinted, t.rgb, vFull);
         float a = t.a * vColor.a;
-        if (a < 0.01) discard;
-        gl_FragColor = vec4(mix(rgb, uFogColor, vFog * 0.85), a);
+        if (a < 0.004) discard;
+        vec3 tinted = mix(vColor.rgb, vec3(1.0), t.r) * t.g;
+        vec3 full = pow(t.rgb, vec3(2.2));
+        float fireLum = dot(full, vec3(0.3, 0.55, 0.15));
+        vec3 rgb = mix(tinted * (1.0 + vHot * 2.5 * t.r), full * (1.0 + 3.0 * smoothstep(0.45, 0.95, fireLum)), vFull);
+        rgb = mix(rgb, uFogColor, vFog * 0.85);
+        // Coverage weight: 0 = purely additive glow, 1 = normal alpha blend.
+        float cover = mix(mix(1.0, 0.25, vHot), mix(1.0, 0.35, smoothstep(0.5, 0.9, fireLum)), vFull);
+        gl_FragColor = vec4(rgb * a, a * cover);
       }`,
     transparent: true,
     depthWrite: false,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
   });
 }
 
-/** Soft round contact shadow (decal on the ground). */
+/** Soft ambient-occlusion contact blob under the Harrier (the sun casts the real shadow). */
 export function createBlobShadowMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uOpacity: { value: 0.35 } },
+    uniforms: { uOpacity: { value: 0.2 } },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
       void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -409,7 +395,7 @@ export function createBlobShadowMaterial(): THREE.ShaderMaterial {
       varying vec2 vUv;
       void main() {
         float d = length(vUv - 0.5) * 2.0;
-        gl_FragColor = vec4(0.05, 0.1, 0.2, smoothstep(1.0, 0.2, d) * uOpacity);
+        gl_FragColor = vec4(0.0, 0.0, 0.0, smoothstep(1.0, 0.1, d) * uOpacity);
       }`,
     transparent: true,
     depthWrite: false,
@@ -417,55 +403,78 @@ export function createBlobShadowMaterial(): THREE.ShaderMaterial {
 }
 
 // ---------------------------------------------------------------------------
-// Final full-screen pass: gentle colour grade, vignette, damage tint and the
-// radial warp blur. (Replaces the earlier CRT raster pass.)
+// Final display-space pass (after tone mapping): warp blur, film grade
+// (split tone, lift/gain, saturation, contrast), vignette, chromatic fringe,
+// grain and the damage tint.
 // ---------------------------------------------------------------------------
-export function createGradeMaterial(): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      tDiffuse: { value: null },
-      uRes: { value: new THREE.Vector2(1, 1) },
-      uDamage: { value: 0 },
-      uWarp: globalUniforms.uWarp,
-    },
-    vertexShader: /* glsl */ `
-      varying vec2 vUv;
-      void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
-    fragmentShader: /* glsl */ `
-      uniform sampler2D tDiffuse;
-      uniform float uDamage;
-      uniform float uWarp;
-      varying vec2 vUv;
-      void main() {
-        vec2 uv = vUv;
-        vec2 pos = uv - 0.5;
-        vec3 col = texture2D(tDiffuse, uv).rgb;
-        if (uWarp > 0.01) {
-          vec3 acc = col;
-          for (int i = 1; i <= 4; i++) acc += texture2D(tDiffuse, uv - pos * 0.025 * float(i) * uWarp).rgb;
-          col = mix(col, acc / 5.0, uWarp) + uWarp * 0.12;
-        }
-        // Gentle vibrance + contrast.
-        float l = dot(col, vec3(0.299, 0.587, 0.114));
-        col = mix(vec3(l), col, 1.12);
-        col = (col - 0.5) * 1.04 + 0.5;
-        float v = smoothstep(0.95, 0.35, length(pos * vec2(1.0, 1.2)));
-        col *= mix(0.82, 1.0, v);
-        col = mix(col, vec3(1.0, 0.15, 0.25), uDamage * (1.0 - v) * 0.85);
-        gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
-      }`,
-    depthTest: false,
-    depthWrite: false,
-  });
+export interface GradeSettings {
+  lift: [number, number, number];
+  gain: [number, number, number];
+  shadowTint: [number, number, number];
+  highTint: [number, number, number];
+  saturation: number;
+  contrast: number;
 }
 
-/** CPU mirror of the terrain vertex shader (hills + curvature) so props sit on the ground. */
+export const GRADE_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null as THREE.Texture | null },
+    uRes: { value: new THREE.Vector2(1, 1) },
+    uTime: globalUniforms.uTime,
+    uDamage: { value: 0 },
+    uWarp: globalUniforms.uWarp,
+    uLift: { value: new THREE.Vector3(0.035, 0.03, 0.045) },
+    uGain: { value: new THREE.Vector3(1.04, 1.0, 0.95) },
+    uShadowTint: { value: new THREE.Vector3(-0.01, 0.0, 0.025) },
+    uHighTint: { value: new THREE.Vector3(0.03, 0.015, -0.01) },
+    uSat: { value: 0.96 },
+    uContrast: { value: 1.07 },
+    uVig: { value: 0.36 },
+    uGrain: { value: 0.03 },
+    uCA: { value: 0.0016 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uRes;
+    uniform float uTime, uDamage, uWarp, uSat, uContrast, uVig, uGrain, uCA;
+    uniform vec3 uLift, uGain, uShadowTint, uHighTint;
+    varying vec2 vUv;
+    float ghash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main() {
+      vec2 uv = vUv;
+      vec2 c = uv - 0.5;
+      vec3 col = vec3(texture2D(tDiffuse, uv - c * uCA).r, texture2D(tDiffuse, uv).g, texture2D(tDiffuse, uv + c * uCA).b);
+      if (uWarp > 0.01) {
+        vec3 acc = col;
+        for (int i = 1; i <= 4; i++) acc += texture2D(tDiffuse, uv - c * 0.025 * float(i) * uWarp).rgb;
+        col = mix(col, acc / 5.0, uWarp) + uWarp * 0.1;
+      }
+      float l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col += uShadowTint * (1.0 - smoothstep(0.0, 0.5, l)) + uHighTint * smoothstep(0.45, 1.0, l);
+      col = col * uGain + uLift * (1.0 - col);
+      l = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(l), col, uSat);
+      col = (col - 0.45) * uContrast + 0.45;
+      float v = smoothstep(0.9, 0.25, length(c * vec2(1.0, 0.78)));
+      col *= mix(1.0 - uVig, 1.0, v);
+      col = mix(col, vec3(0.9, 0.12, 0.08), uDamage * (1.0 - v) * 0.85);
+      col += (ghash(uv * uRes + fract(uTime * 7.3) * 91.0) - 0.5) * uGrain;
+      gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    }`,
+};
+
+/** CPU mirror of the terrain vertex stage (height field + curvature) so props sit on the ground. */
 export function terrainY(x: number, z: number, scroll: number, curve = 0.0012): number {
   const zs = z - scroll;
-  const ax = Math.abs(x);
-  const t = Math.min(1, Math.max(0, (ax - 15) / 45));
+  const t = Math.min(1, Math.max(0, (Math.abs(x) - 14) / 44));
   const side = t * t * (3 - 2 * t);
-  const roll = 0.55 + 0.45 * Math.sin(zs * 0.045 + x * 0.07) * Math.cos(zs * 0.021 - x * 0.05);
+  const roll = 0.5 + 0.5 * Math.sin(zs * 0.045 + x * 0.07) * Math.cos(zs * 0.021 - x * 0.05);
+  const r1 = 1 - Math.abs(Math.sin(zs * 0.11 + x * 0.13) * Math.cos(zs * 0.07 - x * 0.09 + 1.3));
+  const r2 = 1 - Math.abs(Math.sin(zs * 0.23 - x * 0.19 + 2.1) * Math.cos(zs * 0.17 + x * 0.21));
+  const ridge = r1 * r1 * 0.65 + r2 * r2 * 0.35;
   const d = Math.max(0, -z - 30);
-  return side * side * (10 + 14 * side) * roll + side * 1.5 - d * d * curve;
+  return side * side * (8 + 18 * side) * (0.45 + 0.55 * roll) + side * ridge * 10 + side * 1.2 - d * d * curve;
 }

@@ -75,6 +75,7 @@ export class Player implements PlayerTarget {
     if (this.model) {
       this.scene.remove(this.model.root);
       for (const m of this.model.materials) m.dispose();
+      for (const f of this.model.flames) (f.material as THREE.Material).dispose();
     }
     this.model = createPlayerModel(a.accent, a.trim);
     this.boltColor = a.bolt;
@@ -259,21 +260,28 @@ export class Player implements PlayerTarget {
       const sn = Math.sin(this.runPhase);
       m.legL.rotation.x = sn * 0.85;
       m.legR.rotation.x = -sn * 0.85;
-      m.shinL.rotation.x = Math.max(0, -sn) * 1.3 + 0.1;
-      m.shinR.rotation.x = Math.max(0, sn) * 1.3 + 0.1;
+      // Knees fold backward (shin swings toward +Z).
+      m.shinL.rotation.x = -Math.max(0, -sn) * 1.3 - 0.1;
+      m.shinR.rotation.x = -Math.max(0, sn) * 1.3 - 0.1;
       m.armL.rotation.x = -sn * 0.6;
       m.body.position.y = Math.abs(Math.cos(this.runPhase)) * 0.09;
       m.body.rotation.x = -0.08;
     } else {
-      // Airborne: tuck legs back, lean into flight.
+      // Airborne: legs trail behind with bent knees, body leans into flight.
       const k = Math.min(1, dt * 8);
-      m.legL.rotation.x += (0.55 - m.legL.rotation.x) * k;
-      m.legR.rotation.x += (0.35 - m.legR.rotation.x) * k;
-      m.shinL.rotation.x += (0.9 - m.shinL.rotation.x) * k;
-      m.shinR.rotation.x += (0.7 - m.shinR.rotation.x) * k;
+      m.legL.rotation.x += (0.15 - m.legL.rotation.x) * k;
+      m.legR.rotation.x += (-0.1 - m.legR.rotation.x) * k;
+      m.shinL.rotation.x += (-0.85 - m.shinL.rotation.x) * k;
+      m.shinR.rotation.x += (-0.55 - m.shinR.rotation.x) * k;
       m.armL.rotation.x += (-0.3 - m.armL.rotation.x) * k;
       m.body.position.y += (Math.sin(performance.now() * 0.004) * 0.05 - m.body.position.y) * k;
-      m.body.rotation.x += (-0.22 - m.body.rotation.x) * k;
+      m.body.rotation.x += (-0.3 - m.body.rotation.x) * k;
+    }
+    // Thrust flames flicker, and burn shorter while running on the ground.
+    const thrustLen = grounded ? 0.45 : 1;
+    for (const f of m.flames) {
+      f.scale.set(1, thrustLen * (0.85 + Math.random() * 0.3), 1);
+      (f.material as THREE.ShaderMaterial).uniforms.uPower.value = 2.4 + Math.random() * 0.8;
     }
 
     // Hit flicker.
@@ -294,12 +302,12 @@ export class Player implements PlayerTarget {
           (Math.random() - 0.5) * 1.5 - this.vel.x * 0.3,
           -3 * thrust - Math.random() * 2,
           6 + Math.random() * 4,
-          0.2,
-          0.35 * thrust,
-          0.65 * thrust,
-          1,
-          1,
-          1,
+          0.25,
+          0.3 * thrust,
+          0.8 * thrust,
+          0.62,
+          0.6,
+          0.58,
         );
       }
     }

@@ -235,7 +235,7 @@ export class PylonSentinel extends Enemy {
           _d.subVectors(this.sweepBase, this.headPos).normalize().applyAxisAngle(UP, off).multiplyScalar(38);
           ctx.projectiles.spawnEnemy(this.headPos.x, this.headPos.y, this.headPos.z + 0.9, _d.x, _d.y, _d.z, {
             needle: true,
-            color: 0x5cff9d,
+            color: 0xff5a2a,
             dmg: 10,
           });
         }
@@ -501,7 +501,7 @@ export class SectorBoss extends Enemy {
   private runPatterns(dt: number, ctx: GameContext): void {
     const P = this.phase;
     const pos = this.pos;
-    const col = P === 1 ? 0xff4fa0 : P === 2 ? 0xffb347 : 0xff3d5a;
+    const col = P === 1 ? 0xff3a4a : P === 2 ? 0xffb347 : 0xff3d5a;
 
     // Radial rings expanding toward the player.
     this.ringT -= dt;
@@ -588,8 +588,8 @@ export class SectorBoss extends Enemy {
 }
 
 // ===========================================================================
-// Tree field: puffy trees that scroll with the rail and sit on the terrain.
-// Trees in the flight lane are solid obstacles (indestructible).
+// Spire field: eroded rock spires that scroll with the rail and sit on the
+// terrain. Spires in the flight lane are solid obstacles (indestructible).
 // ===========================================================================
 export class TreeField {
   private readonly items: { x: number; z: number; s: number; hue: number; hit: boolean; wob: number }[] = [];
@@ -647,9 +647,9 @@ export class TreeField {
     let n = 0;
     for (const it of this.items) {
       const y = terrainY(it.x, it.z, scroll);
-      // Gentle sway, plus a springy wobble when the Harrier clips a tree.
-      const sway = Math.sin(it.z * 0.15 + it.hue * 6) * 0.03 + Math.sin(it.wob * 18) * it.wob * 0.25;
-      this.q.setFromAxisAngle(FWD, sway);
+      // Rock doesn't sway; it shudders briefly when the Harrier clips it.
+      const shudder = Math.sin(it.wob * 40) * it.wob * 0.04;
+      this.q.setFromAxisAngle(UP, it.hue * Math.PI * 2).premultiply(_q.setFromAxisAngle(FWD, shudder));
       this.m.compose(this.v.set(it.x, y, it.z), this.q, this.sc.setScalar(it.s));
       this.trunks.setMatrixAt(n, this.m);
       this.canopies.setMatrixAt(n, this.m);
