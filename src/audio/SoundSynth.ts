@@ -264,7 +264,8 @@ export class SoundSynth {
     o.stop(t + 0.09);
   }
 
-  overheat(): void {
+  /** Refusal buzz: locked purchase, ordnance not ready. */
+  deny(): void {
     if (!this.live) return;
     const t = this.now;
     const o = this.ctx.createOscillator();

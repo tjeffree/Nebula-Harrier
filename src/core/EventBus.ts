@@ -2,11 +2,9 @@
 export interface GameEvents {
   'enemy:killed': { x: number; y: number; z: number; points: number; kind: string };
   'enemy:hit': { x: number; y: number; z: number };
-  'player:fire': { heat: number };
   'player:hit': { damage: number; hp: number };
   'player:dash': { x: number; y: number };
   'player:died': Record<string, never>;
-  'player:overheat': Record<string, never>;
   'boss:spawn': { name: string; maxHp: number };
   'boss:phase': { phase: number };
   'boss:killed': { x: number; y: number; z: number };

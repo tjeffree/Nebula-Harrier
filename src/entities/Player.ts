@@ -42,8 +42,6 @@ export class Player implements PlayerTarget {
   readonly vel = new THREE.Vector3();
   readonly radius = 0.55;
   hp = 100;
-  heat = 0;
-  overheated = false;
   alive = true;
   shieldUp = false;
   dashCooldownLeft = 0;
@@ -92,8 +90,6 @@ export class Player implements PlayerTarget {
   reset(stats: RunStats): void {
     this.stats = stats;
     this.hp = stats.maxHp;
-    this.heat = 0;
-    this.overheated = false;
     this.alive = true;
     this.pos.set(0, BOUNDS.minY, PLAYER_Z);
     this.vel.set(0, 0, 0);
@@ -199,14 +195,11 @@ export class Player implements PlayerTarget {
 
     // --- Weapons -----------------------------------------------------------
     this.fireCd -= dt;
-    const firing = ctx.controlsEnabled && input.fire && !this.overheated;
-    if (firing && this.fireCd <= 0) {
+    if (ctx.controlsEnabled && input.fire && this.fireCd <= 0) {
       this.fireCd = Math.max(this.fireCd + s.fireInterval, 0);
       this.fire(ctx);
     }
     if (this.fireCd < 0) this.fireCd = 0;
-    this.heat = Math.max(0, this.heat - s.coolRate * dt * (firing ? 0.35 : 1));
-    if (this.overheated && this.heat <= 0.3) this.overheated = false;
 
     this.animate(dt, ctx);
   }
@@ -233,14 +226,11 @@ export class Player implements PlayerTarget {
     const bc = this.boltColor;
     ctx.particles.emit(_a.x, _a.y, _a.z, 0, 0, -4, 0.07, 1.1, 0.4, ((bc >> 16) & 255) / 255, ((bc >> 8) & 255) / 255, (bc & 255) / 255, ATLAS.SPARK);
     ctx.sfx.laser(ways > 1 ? 1.15 : 1);
-    this.heat += s.heatPerShot;
-    if (this.heat >= 1) {
-      this.heat = 1;
-      this.overheated = true;
-      ctx.sfx.overheat();
-      bus.emit('player:overheat', {});
-    }
-    bus.emit('player:fire', { heat: this.heat });
+  }
+
+  /** Where secondary ordnance launches from: just above the Harrier's shoulder. */
+  launchPoint(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(this.pos.x, this.pos.y + CHEST + 0.6, this.pos.z - 0.5);
   }
 
   private animate(dt: number, ctx: PlayerUpdateContext): void {
@@ -319,9 +309,6 @@ export class Player implements PlayerTarget {
     if (this.shieldUp) {
       const p = 1 + Math.sin(time * 6) * 0.05;
       batch.push(this.pos.x, this.pos.y + CHEST, this.pos.z + 0.4, ATLAS.RING, 2.6 * p, 2.6 * p, time, 0.2, 0.85, 1, 0.6);
-    }
-    if (this.overheated) {
-      batch.push(this.pos.x + 0.6, this.pos.y + 1.6 + Math.sin(time * 9) * 0.1, this.pos.z, ATLAS.PUFF, 1.3, 1.3, time, 0.85, 0.85, 0.9, 0.6 + 0.3 * Math.sin(time * 20));
     }
   }
 }

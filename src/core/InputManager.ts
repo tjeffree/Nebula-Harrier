@@ -23,6 +23,7 @@ export class InputManager {
   private touchFire = false;
   private padFire = false;
   private dashQueued: { x: number; y: number } | null = null;
+  private secondaryQueued = false;
   private pauseQueued = false;
   private navQueue: NavAction[] = [];
   private lastDir = { x: 1, y: 0 };
@@ -37,6 +38,9 @@ export class InputManager {
   private stickBase!: HTMLDivElement;
   private stickKnob!: HTMLDivElement;
   private fireBtn!: HTMLDivElement;
+  private altBtn!: HTMLDivElement;
+  private altLabel!: HTMLSpanElement;
+  private altState = { fill: -1, label: '' };
   private touchLayer!: HTMLDivElement;
 
   // Gamepad edge detection.
@@ -53,6 +57,7 @@ export class InputManager {
     });
     surface.addEventListener('mousedown', (e) => {
       if (e.button === 0) this.mouseFire = true;
+      if (e.button === 2) this.secondaryQueued = true;
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseFire = false;
@@ -66,6 +71,7 @@ export class InputManager {
     if (down) {
       if (!this.keys.has(code)) {
         if (code === 'ShiftLeft' || code === 'ShiftRight') this.queueDashFromMove();
+        if (code === 'KeyE' || code === 'KeyX') this.secondaryQueued = true;
         if (code === 'Escape' || code === 'KeyP') this.pauseQueued = true;
         if (this.menuMode) {
           const nav: Record<string, NavAction> = {
@@ -117,7 +123,8 @@ export class InputManager {
     layer.innerHTML = `
       <div class="stick-zone"></div>
       <div class="stick-base"><div class="stick-knob"></div></div>
-      <div class="fire-btn"><span>FIRE</span></div>`;
+      <div class="fire-btn"><span>FIRE</span></div>
+      <div class="alt-btn empty"><span></span></div>`;
     this.surface.parentElement!.appendChild(layer);
     this.touchLayer = layer;
     this.stickBase = layer.querySelector('.stick-base') as HTMLDivElement;
@@ -154,11 +161,33 @@ export class InputManager {
     };
     this.fireBtn.addEventListener('touchend', endFire, opts);
     this.fireBtn.addEventListener('touchcancel', endFire, opts);
+
+    this.altBtn = layer.querySelector('.alt-btn') as HTMLDivElement;
+    this.altLabel = this.altBtn.querySelector('span') as HTMLSpanElement;
+    this.altBtn.addEventListener(
+      'touchstart',
+      (e) => {
+        e.preventDefault();
+        this.secondaryQueued = true;
+      },
+      opts,
+    );
     this.setTouchVisible(false);
   }
 
   setTouchVisible(v: boolean): void {
     this.touchLayer.style.display = v && this.isTouch ? 'block' : 'none';
+  }
+
+  /** Secondary button: `fill` 0..1 sweeps round as it recharges; an empty label means nothing equipped. */
+  setSecondaryButton(fill: number, label: string): void {
+    const f = Math.round(fill * 50) / 50;
+    if (f === this.altState.fill && label === this.altState.label) return;
+    this.altState = { fill: f, label };
+    this.altBtn.style.setProperty('--fill', String(f));
+    this.altBtn.classList.toggle('empty', !label);
+    this.altBtn.classList.toggle('ready', !!label && f >= 1);
+    this.altLabel.textContent = label;
   }
 
   private onStickStart(e: TouchEvent): void {
@@ -252,6 +281,7 @@ export class InputManager {
       if (b(14)) mx -= 1;
       if (b(15)) mx += 1;
       padFire = b(7) || b(0) || (pad.buttons[7]?.value ?? 0) > 0.3;
+      if (edge(5) || edge(2)) this.secondaryQueued = true;
       if (edge(4)) {
         const len = Math.hypot(mx, my);
         this.dashQueued = len > 0.2 ? { x: mx / len, y: my / len } : { ...this.lastDir };
@@ -293,6 +323,12 @@ export class InputManager {
     return d;
   }
 
+  consumeSecondary(): boolean {
+    const s = this.secondaryQueued;
+    this.secondaryQueued = false;
+    return s;
+  }
+
   consumePause(): boolean {
     const p = this.pauseQueued;
     this.pauseQueued = false;
@@ -310,6 +346,7 @@ export class InputManager {
   /** Drops any input latched while a menu was open so it doesn't leak into play. */
   flush(): void {
     this.dashQueued = null;
+    this.secondaryQueued = false;
     this.pauseQueued = false;
     this.navQueue.length = 0;
     this.mouseFire = false;

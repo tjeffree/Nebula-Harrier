@@ -1,6 +1,6 @@
 import type { ArchetypeId } from './BoonRegistry';
 
-export type UpgradeId = 'hull_plating' | 'thermal_heatsink' | 'core_flux';
+export type UpgradeId = 'hull_plating' | 'ordnance_bay' | 'core_flux';
 
 export interface UpgradeEntry {
   tier: number;
@@ -21,7 +21,7 @@ export interface MetaProfile {
 
 export const UPGRADE_INFO: Record<UpgradeId, { name: string; desc: string }> = {
   hull_plating: { name: 'Hull Plating', desc: '+20 max hull per tier' },
-  thermal_heatsink: { name: 'Thermal Heatsink', desc: '−12% heat per shot, +15% cooling per tier' },
+  ordnance_bay: { name: 'Ordnance Bay', desc: 'Launch with a Nova Bomb · −10% secondary cooldown per tier' },
   core_flux: { name: 'Core Flux', desc: '+20% projectile damage per tier' },
 };
 
@@ -34,7 +34,7 @@ function defaults(): MetaProfile {
     chronocores: 0,
     upgrades: {
       hull_plating: { tier: 0, max: 5, base_cost: 100, scalar: 1.7 },
-      thermal_heatsink: { tier: 0, max: 5, base_cost: 150, scalar: 2.0 },
+      ordnance_bay: { tier: 0, max: 5, base_cost: 150, scalar: 2.0 },
       core_flux: { tier: 0, max: 3, base_cost: 500, scalar: 2.5 },
     },
     unlocked_archetypes: ['STRIKER'],
@@ -114,7 +114,9 @@ export class MetaStore {
     // Merge so new fields added in later versions get defaults.
     const merged: MetaProfile = { ...d, ...p, settings: { ...d.settings, ...p.settings }, upgrades: { ...d.upgrades } };
     for (const id of Object.keys(d.upgrades) as UpgradeId[]) {
-      const tier = p.upgrades?.[id]?.tier ?? 0;
+      // Ordnance Bay replaced Thermal Heatsink; carry over tiers already paid for.
+      const legacy = id === 'ordnance_bay' ? (p.upgrades as Record<string, UpgradeEntry> | undefined)?.thermal_heatsink?.tier : undefined;
+      const tier = p.upgrades?.[id]?.tier ?? legacy ?? 0;
       merged.upgrades[id] = { ...d.upgrades[id], tier: Math.max(0, Math.min(d.upgrades[id].max, tier | 0)) };
     }
     if (!merged.unlocked_archetypes.includes('STRIKER')) merged.unlocked_archetypes.unshift('STRIKER');

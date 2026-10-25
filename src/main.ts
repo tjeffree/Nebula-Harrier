@@ -5,6 +5,7 @@ import { bus } from './core/EventBus';
 import { SoundSynth } from './audio/SoundSynth';
 import { MusicTrackGen } from './audio/MusicTrackGen';
 import { Player } from './entities/Player';
+import { Ordnance, SECONDARIES } from './entities/Ordnance';
 import { ArcRenderer, ParticleSystem, ProjectileSystem, SpriteBatch, type Hittable } from './entities/ProjectileSystem';
 import { Enemy, EnemyManager, InstanceWriter, type GameContext } from './entities/EnemyBase';
 import { DroneWyrm, NebulaTitan, PylonSentinel, SectorBoss, TreeField } from './entities/EnemyVariants';
@@ -58,6 +59,8 @@ class Game {
   private readonly particles = new ParticleSystem(4096);
   private readonly batch: SpriteBatch;
   private readonly arcs = new ArcRenderer();
+  private readonly ordnance = new Ordnance();
+  private readonly launchAt = new THREE.Vector3();
   private readonly enemies = new EnemyManager();
   private readonly trees: TreeField;
   private readonly foliage: THREE.Color[] = [];
@@ -88,7 +91,7 @@ class Game {
   private readonly chainBuf: Enemy[] = [];
   private readonly camLook = new THREE.Vector3();
   private readonly aimPoint = new THREE.Vector3();
-  private lastHud = { score: -1, time: -1, mult: '', hp: -1, heat: -1 };
+  private lastHud = { score: -1, time: -1, mult: '', hp: -1, sec: '' };
   private menuReturn: (() => void) | null = null;
 
   // DOM.
@@ -175,7 +178,7 @@ class Game {
   private metaBonuses() {
     return {
       hullTier: this.meta.tier('hull_plating'),
-      heatsinkTier: this.meta.tier('thermal_heatsink'),
+      ordnanceTier: this.meta.tier('ordnance_bay'),
       fluxTier: this.meta.tier('core_flux'),
     };
   }
@@ -189,7 +192,12 @@ class Game {
       this.score += Math.round(e.points * this.stats.scoreMul);
       this.sfx.explosion(e.kind === 'titan' ? 1.6 : e.kind === 'sentinel' ? 1.1 : 0.7);
       this.shake = Math.max(this.shake, e.kind === 'titan' ? 0.5 : 0.15);
+      if (this.state === 'sector' || this.state === 'boss') this.ordnance.maybeDrop(e.x, e.y, e.z, e.kind);
     });
+    this.ordnance.onPickup = (id) => {
+      this.sfx.boon();
+      this.showBanner(SECONDARIES[id].name.toUpperCase(), SECONDARIES[id].blurb);
+    };
     bus.on('player:hit', (e) => {
       if (e.damage === 0) {
         this.sfx.shieldBreak();
@@ -282,6 +290,7 @@ class Game {
     this.player.setArchetype(arch);
     this.stats = this.boons.computeStats(arch, this.metaBonuses());
     this.player.reset(this.stats);
+    this.ordnance.reset(this.meta.tier('ordnance_bay') > 0 ? 'nova' : null);
     this.runSeed = (Math.random() * 1e9) | 0;
     this.sector = START_SECTOR;
     this.score = 0;
@@ -333,6 +342,7 @@ class Game {
     this.arcs.clear();
     this.trees.clear();
     this.mines.length = 0;
+    this.ordnance.clearField();
     this.boss = null;
     $('#boss').classList.remove('on');
   }
@@ -494,6 +504,10 @@ class Game {
     return best ? this.aimPoint.copy(best.pos) : null;
   }
 
+  private ordnanceCtx() {
+    return { game: this.ctx, arcs: this.arcs, stats: this.stats };
+  }
+
   private updateMines(dt: number): void {
     for (let i = this.mines.length - 1; i >= 0; i--) {
       const m = this.mines[i];
@@ -554,6 +568,7 @@ class Game {
     this.batch.begin();
     this.ctx.wyrmWriter.begin();
 
+    const controlsEnabled = playing && this.state !== 'warp' && this.state !== 'dying';
     this.player.update(dt, {
       input: this.input,
       projectiles: this.projectiles,
@@ -561,9 +576,14 @@ class Game {
       sfx: this.sfx,
       camera: this.engine.camera,
       railSpeed: rail,
-      controlsEnabled: playing && this.state !== 'warp' && this.state !== 'dying',
+      controlsEnabled,
       aimAssist: (x, y, z) => this.aimAssist(x, y, z),
     });
+    if (this.input.consumeSecondary() && controlsEnabled && this.player.alive) {
+      const at = this.player.launchPoint(this.launchAt);
+      if (this.ordnance.tryFire(at.x, at.y, at.z, this.ordnanceCtx())) this.shake = Math.max(this.shake, 0.35);
+      else this.sfx.deny();
+    }
     if (GOD) this.player.hp = this.player.stats.maxHp;
 
     if (playing) {
@@ -579,6 +599,7 @@ class Game {
       );
       this.projectiles.update(dt, this.enemies.list, this.player, this.ctx.fx.bulletSpeedMul);
       this.updateMines(dt);
+      this.ordnance.update(dt, this.player.x, this.player.y, this.player.z, this.ordnanceCtx());
     }
     const p = this.player.pos;
     const treeDmg = this.trees.update(dt, rail, globalUniforms.uScroll.value, p.x, p.y, p.z, this.foliage, playing && this.player.vulnerable());
@@ -697,18 +718,24 @@ class Game {
     const p = this.player;
     const s = this.stats;
     $('#hp-fill').style.transform = `scaleX(${Math.max(0, p.hp / s.maxHp)})`;
-    $('#heat-fill').style.transform = `scaleX(${p.heat})`;
-    $('#heat-bar').classList.toggle('hot', p.overheated);
+    const o = this.ordnance;
+    const ready = o.readiness(s);
+    $('#sec-fill').style.transform = `scaleX(${ready})`;
+    const sec = o.equipped ? `${SECONDARIES[o.equipped].short}|${o.cooldownLeft > 0 ? Math.ceil(o.cooldownLeft) : ''}` : '';
+    if (sec !== this.lastHud.sec) {
+      this.lastHud.sec = sec;
+      const [name = '', secs = ''] = sec.split('|');
+      $('#sec-name').textContent = name || '—';
+      $('#sec-num').textContent = secs;
+      $('#sec-row').classList.toggle('empty', !name);
+      $('#sec-row').classList.toggle('ready', !!name && !secs);
+    }
+    this.input.setSecondaryButton(ready, o.equipped ? SECONDARIES[o.equipped].short : '');
     $('#dash-fill').style.transform = `scaleX(${1 - p.dashCooldownLeft / s.dashCooldown})`;
     const hp = Math.ceil(p.hp);
     if (hp !== this.lastHud.hp) {
       this.lastHud.hp = hp;
       $('#hp-num').textContent = String(hp);
-    }
-    const heat = Math.round(p.heat * 100);
-    if (heat !== this.lastHud.heat) {
-      this.lastHud.heat = heat;
-      $('#heat-num').textContent = String(heat);
     }
     if (this.score !== this.lastHud.score) {
       this.lastHud.score = this.score;
@@ -817,8 +844,8 @@ class Game {
 
   private helpHtml(): string {
     return this.input.isTouch
-      ? `<div class="help">LEFT THUMB: MOVE · DOUBLE-TAP + PUSH: EVADE · FIRE BUTTON: SHOOT · II: PAUSE</div>`
-      : `<div class="help">WASD / ARROWS: MOVE · SPACE / LMB: FIRE · SHIFT + DIRECTION: EVADE · ESC / P: PAUSE<br/>GAMEPAD: LEFT STICK · RT / A FIRE · LB EVADE · START PAUSE</div>`;
+      ? `<div class="help">LEFT THUMB: MOVE · DOUBLE-TAP + PUSH: EVADE · FIRE: SHOOT · SMALL BUTTON: ORDNANCE · II: PAUSE</div>`
+      : `<div class="help">WASD / ARROWS: MOVE · SPACE / LMB: FIRE · E / RMB: ORDNANCE · SHIFT + DIRECTION: EVADE · ESC / P: PAUSE<br/>GAMEPAD: LEFT STICK · RT / A FIRE · RB / X ORDNANCE · LB EVADE · START PAUSE</div>`;
   }
 
   private applySettings(): void {
@@ -994,7 +1021,7 @@ class Game {
         const id = arg as ArchetypeId;
         if (!prof.unlocked_archetypes.includes(id)) {
           if (!this.meta.unlockArchetype(id, ARCHETYPES[id].unlockCost)) {
-            this.sfx.overheat();
+            this.sfx.deny();
             return;
           }
           this.sfx.boon();

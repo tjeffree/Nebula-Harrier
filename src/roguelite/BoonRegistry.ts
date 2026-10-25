@@ -4,8 +4,9 @@ export interface RunStats {
   fireInterval: number;
   projSpeed: number;
   jitter: number;
-  heatPerShot: number;
-  coolRate: number;
+  /** Multiplies secondary-weapon cooldown and damage. */
+  secondaryCdMul: number;
+  secondaryDmgMul: number;
   chainTargets: number;
   chainRange: number;
   chainDamageMul: number;
@@ -31,7 +32,7 @@ export interface Archetype {
   trim: number;
   /** Colour of this frame's energy bolts. */
   bolt: number;
-  base: Pick<RunStats, 'damage' | 'fireInterval' | 'projSpeed' | 'jitter' | 'heatPerShot' | 'dashCooldown' | 'dashInvuln'>;
+  base: Pick<RunStats, 'damage' | 'fireInterval' | 'projSpeed' | 'jitter' | 'dashCooldown' | 'dashInvuln'>;
 }
 
 export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
@@ -43,7 +44,7 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     accent: 0xe8742c,
     trim: 0xffb35a,
     bolt: 0xffd27a,
-    base: { damage: 1.6, fireInterval: 0.13, projSpeed: 120, jitter: 0, heatPerShot: 0.035, dashCooldown: 0.85, dashInvuln: 0.14 },
+    base: { damage: 1.6, fireInterval: 0.13, projSpeed: 120, jitter: 0, dashCooldown: 0.85, dashInvuln: 0.14 },
   },
   TEMPEST: {
     id: 'TEMPEST',
@@ -53,7 +54,7 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     accent: 0xd9b23a,
     trim: 0xffe08a,
     bolt: 0xffa040,
-    base: { damage: 0.95, fireInterval: 0.07, projSpeed: 130, jitter: 0.03, heatPerShot: 0.022, dashCooldown: 0.85, dashInvuln: 0.14 },
+    base: { damage: 0.95, fireInterval: 0.07, projSpeed: 130, jitter: 0.03, dashCooldown: 0.85, dashInvuln: 0.14 },
   },
   PHANTOM: {
     id: 'PHANTOM',
@@ -63,13 +64,13 @@ export const ARCHETYPES: Record<ArchetypeId, Archetype> = {
     accent: 0x4a8fc9,
     trim: 0x9fd8ff,
     bolt: 0x8fdcff,
-    base: { damage: 1.25, fireInterval: 0.11, projSpeed: 125, jitter: 0, heatPerShot: 0.03, dashCooldown: 0.45, dashInvuln: 0.3 },
+    base: { damage: 1.25, fireInterval: 0.11, projSpeed: 125, jitter: 0, dashCooldown: 0.45, dashInvuln: 0.3 },
   },
 };
 
 export interface MetaBonuses {
   hullTier: number;
-  heatsinkTier: number;
+  ordnanceTier: number;
   fluxTier: number;
 }
 
@@ -79,7 +80,7 @@ export type BoonId =
   | 'prism_splitter'
   | 'superluminal_engine'
   | 'fractal_rounds'
-  | 'hyperheat_vents'
+  | 'ordnance_link'
   | 'nanite_weave'
   | 'aegis_lattice';
 
@@ -154,14 +155,14 @@ export const BOONS: Record<BoonId, BoonDef> = {
       s.damage *= Math.pow(1.3, n);
     },
   },
-  hyperheat_vents: {
-    id: 'hyperheat_vents',
-    name: 'Hyperheat Vents',
-    glyph: '♨',
+  ordnance_link: {
+    id: 'ordnance_link',
+    name: 'Ordnance Link',
+    glyph: '✸',
     maxStacks: 2,
-    desc: () => 'Heat per shot −30%, fire rate +12%.',
+    desc: () => 'Secondary weapon cooldown −25%, fire rate +12%.',
     apply: (s, n) => {
-      s.heatPerShot *= Math.pow(0.7, n);
+      s.secondaryCdMul *= Math.pow(0.75, n);
       s.fireInterval /= Math.pow(1.12, n);
     },
   },
@@ -216,12 +217,12 @@ export const SYNERGIES: SynergyDef[] = [
     },
   },
   {
-    id: 'thermal_cascade',
-    name: 'Thermal Cascade',
-    requires: ['hyperheat_vents', 'fractal_rounds'],
-    desc: 'Heat generation halved again.',
+    id: 'cluster_payload',
+    name: 'Cluster Payload',
+    requires: ['ordnance_link', 'fractal_rounds'],
+    desc: 'Secondary weapon damage ×1.6.',
     apply: (s) => {
-      s.heatPerShot *= 0.5;
+      s.secondaryDmgMul *= 1.6;
     },
   },
 ];
@@ -284,7 +285,8 @@ export class BoonRegistry {
   computeStats(arch: Archetype, meta: MetaBonuses): RunStats {
     const s: RunStats = {
       ...arch.base,
-      coolRate: 0.55,
+      secondaryCdMul: 1,
+      secondaryDmgMul: 1,
       chainTargets: 0,
       chainRange: 0,
       chainDamageMul: 0.5,
@@ -298,8 +300,7 @@ export class BoonRegistry {
     };
     // Meta-tree permanent upgrades.
     s.maxHp += 20 * meta.hullTier;
-    s.heatPerShot *= 1 - 0.12 * meta.heatsinkTier;
-    s.coolRate *= 1 + 0.15 * meta.heatsinkTier;
+    s.secondaryCdMul *= 1 - 0.1 * meta.ordnanceTier;
     s.damage *= 1 + 0.2 * meta.fluxTier;
     // Boons, then synergies.
     for (const [id, n] of this.owned) BOONS[id].apply(s, n);
