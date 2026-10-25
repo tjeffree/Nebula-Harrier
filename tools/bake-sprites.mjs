@@ -73,8 +73,14 @@ const tracer = (width) => (u, v) => {
   return [Math.max(core, body * 0.15), 1, 0, Math.max(halo, body)];
 };
 
-// 0: PLAYER_BOLT
-cell(0, tracer(0.17));
+// 0: PLAYER_BOLT – energy ball: white-hot core, tinted body, soft halo.
+cell(0, (u, v) => {
+  const r = Math.hypot(u, v);
+  const halo = Math.exp(-r * r * 4) * 0.55;
+  const body = smooth(0.5, 0.36, r);
+  const core = smooth(0.3, 0.05, r);
+  return [Math.max(core, body * 0.15), 1, 0, Math.max(halo, body)];
+});
 
 // 1: ENEMY_ORB – plasma ball with a dark rim so it reads against bright sky.
 cell(1, (u, v) => {

@@ -338,7 +338,7 @@ export class ProjectileSystem {
     const p = this.player;
     for (let i = 0; i < p.count; i++) {
       const s = p.size[i];
-      batch.push(p.x[i], p.y[i], p.z[i], p.cell[i], s * 0.7, s * 1.5, 0, p.r[i], p.g[i], p.b[i], 1);
+      batch.push(p.x[i], p.y[i], p.z[i], p.cell[i], s * 1.5, s * 1.5, 0, p.r[i], p.g[i], p.b[i], 1);
     }
     const e = this.enemy;
     for (let i = 0; i < e.count; i++) {
